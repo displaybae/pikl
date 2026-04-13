@@ -317,6 +317,12 @@ const server = http.createServer(async (req, res) => {
 
       sendBtn.addEventListener("click", sendMessage);
 
+      function renderText(text) {
+        return text
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#93c5fd">$1</strong>');
+      }
+
       function addMessage(role, text) {
         if (emptyState) emptyState.remove();
         const row = document.createElement("div");
@@ -324,7 +330,7 @@ const server = http.createServer(async (req, res) => {
         row.innerHTML = \`
           <div class="msg-inner">
             <div class="avatar \${role}">\${role === "user" ? "나" : "AI"}</div>
-            <div class="msg-content \${role}">\${text}</div>
+            <div class="msg-content \${role}">\${renderText(text)}</div>
           </div>\`;
         chatWindow.appendChild(row);
         chatWindow.scrollTop = chatWindow.scrollHeight;
