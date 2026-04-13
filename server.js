@@ -148,7 +148,11 @@ async function handleChat(req, res) {
       return;
     }
 
-    const reply = data.output?.[0]?.content?.[0]?.text || "No text returned.";
+    const raw = data.output?.[0]?.content?.[0]?.text || "No text returned.";
+    // LaTeX 구분자 통일: \(...\) → $...$, \[...\] → $$...$$
+    const reply = raw
+      .replace(/\\\[/g, "$$").replace(/\\\]/g, "$$")
+      .replace(/\\\(/g, "$").replace(/\\\)/g, "$");
 
     await saveMessage(sessionId, "user", message);
     await saveMessage(sessionId, "assistant", reply);
