@@ -113,7 +113,7 @@ async function handleChat(req, res) {
       },
       ...history.map((m) => ({
         role: m.role,
-        content: [{ type: "input_text", text: m.content }],
+        content: [{ type: m.role === "assistant" ? "output_text" : "input_text", text: m.content }],
       })),
       {
         role: "user",
