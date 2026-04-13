@@ -188,6 +188,8 @@ const server = http.createServer(async (req, res) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pikl chat</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
@@ -395,10 +397,42 @@ const server = http.createServer(async (req, res) => {
         emptyState = document.getElementById("empty-state");
       });
 
-      function renderText(text) {
-        return text
-          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#93c5fd">$1</strong>');
+      function renderText(raw) {
+        // 수식 부분 먼저 분리 (HTML 이스케이프 전에 처리)
+        const maths = [];
+        let text = raw;
+
+        // $$...$$ 블록 수식
+        text = text.replace(/\\$\\$([\\s\\S]+?)\\$\\$/g, (_, math) => {
+          const idx = maths.length;
+          try { maths.push(katex.renderToString(math.trim(), { throwOnError: false, displayMode: true })); }
+          catch { maths.push(math); }
+          return '__MATH_' + idx + '__';
+        });
+
+        // $...$ 인라인 수식
+        text = text.replace(/\\$([^\\$\\n]+?)\\$/g, (_, math) => {
+          const idx = maths.length;
+          try { maths.push(katex.renderToString(math.trim(), { throwOnError: false, displayMode: false })); }
+          catch { maths.push(math); }
+          return '__MATH_' + idx + '__';
+        });
+
+        // HTML 이스케이프
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // 마크다운 렌더링
+        text = text.replace(/^### (.+)$/gm, '<h3 style="margin:12px 0 4px;font-size:1rem;color:#ececec;font-weight:600">$1</h3>');
+        text = text.replace(/^## (.+)$/gm, '<h2 style="margin:14px 0 6px;font-size:1.1rem;color:#ececec;font-weight:700">$1</h2>');
+        text = text.replace(/^# (.+)$/gm, '<h1 style="margin:16px 0 8px;font-size:1.25rem;color:#ececec;font-weight:700">$1</h1>');
+        text = text.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid #444;margin:12px 0">');
+        text = text.replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#93c5fd">$1</strong>');
+        text = text.replace(/\`([^\`]+)\`/g, '<code style="background:#2f2f2f;padding:2px 6px;border-radius:4px;font-size:0.88em;font-family:monospace">$1</code>');
+
+        // 수식 복원
+        maths.forEach((html, i) => { text = text.replace('__MATH_' + i + '__', html); });
+
+        return text;
       }
 
       function addMessage(role, text) {
