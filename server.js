@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const { Pool } = require("pg");
 
 const port = Number(process.env.PORT) || 3000;
 const host = "0.0.0.0";
@@ -13,29 +14,57 @@ function loadOpenAIKey() {
   if (process.env.OPENAI_API_KEY) {
     return process.env.OPENAI_API_KEY;
   }
-
   for (const envPath of envCandidates) {
-    if (!fs.existsSync(envPath)) {
-      continue;
-    }
-
+    if (!fs.existsSync(envPath)) continue;
     const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) {
-        continue;
-      }
-      if (!trimmed.startsWith("OPENAI_API_KEY=")) {
-        continue;
-      }
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (!trimmed.startsWith("OPENAI_API_KEY=")) continue;
       return trimmed.slice("OPENAI_API_KEY=".length).trim();
     }
   }
-
   return "";
 }
 
 const openAIKey = loadOpenAIKey();
+
+// PostgreSQL
+const pool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  : null;
+
+async function initDb() {
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id SERIAL PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
+  `);
+  console.log("DB ready");
+}
+
+async function getHistory(sessionId) {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    "SELECT role, content FROM messages WHERE session_id = $1 ORDER BY created_at ASC LIMIT 40",
+    [sessionId]
+  );
+  return rows;
+}
+
+async function saveMessage(sessionId, role, content) {
+  if (!pool) return;
+  await pool.query(
+    "INSERT INTO messages (session_id, role, content) VALUES ($1, $2, $3)",
+    [sessionId, role, content]
+  );
+}
 
 function sendJson(res, statusCode, body) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
@@ -44,26 +73,22 @@ function sendJson(res, statusCode, body) {
 
 async function readJsonBody(req) {
   const chunks = [];
-  for await (const chunk of req) {
-    chunks.push(chunk);
-  }
+  for await (const chunk of req) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
 }
 
 async function handleChat(req, res) {
   if (!openAIKey) {
-    sendJson(res, 500, {
-      error: "OPENAI_API_KEY not found. Put it in pikl/.env or ../project/.env.",
-    });
+    sendJson(res, 500, { error: "OPENAI_API_KEY not found." });
     return;
   }
 
-  let message = "";
-
+  let message = "", sessionId = "";
   try {
     const body = await readJsonBody(req);
     message = String(body.message || "").trim();
+    sessionId = String(body.sessionId || "").trim();
   } catch {
     sendJson(res, 400, { error: "Invalid JSON body." });
     return;
@@ -73,66 +98,62 @@ async function handleChat(req, res) {
     sendJson(res, 400, { error: "message is required." });
     return;
   }
+  if (!sessionId) {
+    sendJson(res, 400, { error: "sessionId is required." });
+    return;
+  }
 
   try {
+    const history = await getHistory(sessionId);
+
+    const input = [
+      {
+        role: "system",
+        content: [{ type: "input_text", text: "You are a helpful assistant. Respond in the same language the user uses." }],
+      },
+      ...history.map((m) => ({
+        role: m.role,
+        content: [{ type: "input_text", text: m.content }],
+      })),
+      {
+        role: "user",
+        content: [{ type: "input_text", text: message }],
+      },
+    ];
+
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${openAIKey}`,
       },
-      body: JSON.stringify({
-        model: "gpt-5.4-mini",
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: "You are a concise assistant for a beginner web demo.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: message,
-              },
-            ],
-          },
-        ],
-      }),
+      body: JSON.stringify({ model: "gpt-5.4-mini", input }),
     });
 
     const data = await response.json();
 
     if (!response.ok) {
-      const apiError =
-        data && data.error && data.error.message
-          ? data.error.message
-          : "OpenAI request failed.";
+      const apiError = data?.error?.message || "OpenAI request failed.";
       sendJson(res, response.status, { error: apiError });
       return;
     }
 
-    sendJson(res, 200, {
-      reply: data.output?.[0]?.content?.[0]?.text || "No text returned.",
-    });
+    const reply = data.output?.[0]?.content?.[0]?.text || "No text returned.";
+
+    await saveMessage(sessionId, "user", message);
+    await saveMessage(sessionId, "assistant", reply);
+
+    sendJson(res, 200, { reply });
   } catch (error) {
-    sendJson(res, 500, {
-      error: error instanceof Error ? error.message : "Unknown server error.",
-    });
+    sendJson(res, 500, { error: error instanceof Error ? error.message : "Unknown server error." });
   }
 }
 
 const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") {
-    sendJson(res, 200, { ok: true, openaiConfigured: Boolean(openAIKey) });
+    sendJson(res, 200, { ok: true, openaiConfigured: Boolean(openAIKey), db: Boolean(pool) });
     return;
   }
-
   if (req.method === "POST" && req.url === "/api/chat") {
     await handleChat(req, res);
     return;
@@ -298,9 +319,16 @@ const server = http.createServer(async (req, res) => {
     </div>
     <script>
       const chatWindow = document.getElementById("chat-window");
-      const emptyState = document.getElementById("empty-state");
+      let emptyState = document.getElementById("empty-state");
       const textarea = document.getElementById("message");
       const sendBtn = document.getElementById("send-btn");
+
+      // 세션 ID: 새로고침해도 유지, 브라우저마다 다름
+      let sessionId = localStorage.getItem("pikl_session");
+      if (!sessionId) {
+        sessionId = crypto.randomUUID();
+        localStorage.setItem("pikl_session", sessionId);
+      }
 
       textarea.addEventListener("input", () => {
         textarea.style.height = "auto";
@@ -324,7 +352,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       function addMessage(role, text) {
-        if (emptyState) emptyState.remove();
+        if (emptyState) { emptyState.remove(); emptyState = null; }
         const row = document.createElement("div");
         row.className = "msg-row";
         row.innerHTML = \`
@@ -338,7 +366,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       function addThinking() {
-        if (emptyState) emptyState.remove();
+        if (emptyState) { emptyState.remove(); emptyState = null; }
         const row = document.createElement("div");
         row.className = "msg-row";
         row.innerHTML = \`
@@ -366,7 +394,7 @@ const server = http.createServer(async (req, res) => {
           const response = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: text }),
+            body: JSON.stringify({ message: text, sessionId }),
           });
           const data = await response.json();
           thinkingRow.remove();
@@ -375,12 +403,16 @@ const server = http.createServer(async (req, res) => {
           thinkingRow.remove();
           addMessage("assistant", "요청 실패: " + err.message);
         }
+
+        sendBtn.disabled = false;
       }
     </script>
   </body>
 </html>`);
 });
 
-server.listen(port, host, () => {
-  console.log(`pikl listening on http://${host}:${port}`);
+initDb().then(() => {
+  server.listen(port, host, () => {
+    console.log(`pikl listening on http://${host}:${port}`);
+  });
 });
