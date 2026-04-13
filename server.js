@@ -137,7 +137,7 @@ async function handleChat(req, res) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${openAIKey}`,
       },
-      body: JSON.stringify({ model: "gpt-5.4-mini", input }),
+      body: JSON.stringify({ model: "gpt-5.4-nano", input }),
     });
 
     const data = await response.json();
