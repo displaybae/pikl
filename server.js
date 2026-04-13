@@ -144,118 +144,217 @@ const server = http.createServer(async (req, res) => {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pikl nano chat</title>
+    <title>pikl chat</title>
     <style>
-      :root {
-        color-scheme: light;
-        --bg: #f1eadf;
-        --ink: #1c1a18;
-        --card: #fff9f2;
-        --line: #dbc9b5;
-        --accent: #145f4a;
-        --soft: #efe4d5;
-      }
-      * { box-sizing: border-box; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        margin: 0;
-        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-        background:
-          radial-gradient(circle at top left, #fff6dc 0, transparent 30%),
-          linear-gradient(180deg, #f5efe6 0%, #efe4d6 100%);
-        color: var(--ink);
+        font-family: "Söhne", "ui-sans-serif", system-ui, -apple-system, sans-serif;
+        background: #212121;
+        color: #ececec;
+        height: 100dvh;
+        display: flex;
+        flex-direction: column;
       }
-      main {
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 24px;
+      #chat-window {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px 0;
+        scroll-behavior: smooth;
       }
-      section {
-        width: min(720px, 100%);
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 24px;
-        padding: 32px;
-        box-shadow: 0 20px 60px rgba(64, 45, 24, 0.08);
+      #chat-window::-webkit-scrollbar { width: 6px; }
+      #chat-window::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+      .msg-row {
+        display: flex;
+        justify-content: center;
+        padding: 4px 16px;
       }
-      h1 {
-        margin: 0 0 12px;
-        font-size: clamp(2rem, 8vw, 4rem);
-        line-height: 0.95;
-      }
-      p {
-        margin: 0 0 12px;
-        font-size: 1.05rem;
-        line-height: 1.6;
-      }
-      form {
-        display: grid;
-        gap: 12px;
-        margin-top: 24px;
-      }
-      textarea {
+      .msg-inner {
         width: 100%;
-        min-height: 120px;
-        resize: vertical;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        padding: 16px;
-        font: inherit;
-        background: #fffdf9;
+        max-width: 720px;
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
       }
-      button {
-        border: 0;
-        border-radius: 999px;
-        padding: 14px 18px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        color: white;
-        background: var(--accent);
+      .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 2px;
       }
-      .bubble {
-        margin-top: 18px;
-        padding: 16px;
-        border-radius: 18px;
-        border: 1px solid var(--line);
-        background: var(--soft);
+      .avatar.user { background: #19c37d; color: #fff; }
+      .avatar.assistant { background: #444654; color: #fff; }
+      .msg-content {
+        flex: 1;
+        font-size: 15px;
+        line-height: 1.7;
+        padding-top: 3px;
         white-space: pre-wrap;
+        word-break: break-word;
       }
-      .muted {
-        color: #6a6258;
-        font-size: 0.95rem;
+      .msg-content.user { color: #ececec; }
+      .msg-content.assistant { color: #d1d5db; }
+      .thinking {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        padding-top: 6px;
       }
+      .thinking span {
+        width: 7px; height: 7px;
+        background: #888;
+        border-radius: 50%;
+        animation: blink 1.2s infinite;
+      }
+      .thinking span:nth-child(2) { animation-delay: 0.2s; }
+      .thinking span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes blink {
+        0%, 80%, 100% { opacity: 0.2; }
+        40% { opacity: 1; }
+      }
+      #input-bar {
+        padding: 12px 16px 20px;
+        display: flex;
+        justify-content: center;
+        background: #212121;
+      }
+      #input-wrap {
+        width: 100%;
+        max-width: 720px;
+        background: #2f2f2f;
+        border-radius: 16px;
+        display: flex;
+        align-items: flex-end;
+        padding: 10px 12px;
+        gap: 8px;
+        border: 1px solid #3f3f3f;
+        transition: border-color 0.15s;
+      }
+      #input-wrap:focus-within { border-color: #666; }
+      #message {
+        flex: 1;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: #ececec;
+        font: inherit;
+        font-size: 15px;
+        resize: none;
+        max-height: 200px;
+        line-height: 1.5;
+        padding: 2px 0;
+      }
+      #message::placeholder { color: #666; }
+      #send-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        border: none;
+        background: #19c37d;
+        color: #fff;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background 0.15s;
+      }
+      #send-btn:disabled { background: #3f3f3f; cursor: default; }
+      #send-btn svg { width: 16px; height: 16px; }
+      #empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        gap: 8px;
+        color: #888;
+      }
+      #empty-state h2 { font-size: 22px; color: #ececec; font-weight: 600; }
+      #empty-state p { font-size: 14px; }
     </style>
   </head>
   <body>
-    <main>
-      <section>
-        <p>OpenAI nano demo</p>
-        <h1>pikl chat</h1>
-        <p>브라우저에서 바로 질문을 보내는 최소 예시입니다.</p>
-        <p class="muted">서버는 OPENAI_API_KEY만 사용합니다. 키 값은 화면에 표시하지 않습니다.</p>
-        <form id="chat-form">
-          <textarea id="message" placeholder="예: 안녕, 오늘 할 일 정리해줘"></textarea>
-          <button type="submit">보내기</button>
-        </form>
-        <div id="status" class="bubble">준비됨. 포트 ${port}에서 실행 중입니다.</div>
-      </section>
-    </main>
+    <div id="chat-window">
+      <div id="empty-state">
+        <h2>pikl chat</h2>
+        <p>무엇이든 물어보세요.</p>
+      </div>
+    </div>
+    <div id="input-bar">
+      <div id="input-wrap">
+        <textarea id="message" rows="1" placeholder="메시지 보내기"></textarea>
+        <button id="send-btn" disabled>
+          <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 1.5L8 14.5M8 1.5L3 6.5M8 1.5L13 6.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
     <script>
-      const form = document.getElementById("chat-form");
-      const message = document.getElementById("message");
-      const status = document.getElementById("status");
+      const chatWindow = document.getElementById("chat-window");
+      const emptyState = document.getElementById("empty-state");
+      const textarea = document.getElementById("message");
+      const sendBtn = document.getElementById("send-btn");
 
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const text = message.value.trim();
+      textarea.addEventListener("input", () => {
+        textarea.style.height = "auto";
+        textarea.style.height = Math.min(textarea.scrollHeight, 200) + "px";
+        sendBtn.disabled = !textarea.value.trim();
+      });
 
-        if (!text) {
-          status.textContent = "먼저 질문을 입력하세요.";
-          return;
+      textarea.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          if (!sendBtn.disabled) sendMessage();
         }
+      });
 
-        status.textContent = "응답 생성 중...";
+      sendBtn.addEventListener("click", sendMessage);
+
+      function addMessage(role, text) {
+        if (emptyState) emptyState.remove();
+        const row = document.createElement("div");
+        row.className = "msg-row";
+        row.innerHTML = \`
+          <div class="msg-inner">
+            <div class="avatar \${role}">\${role === "user" ? "나" : "AI"}</div>
+            <div class="msg-content \${role}">\${text}</div>
+          </div>\`;
+        chatWindow.appendChild(row);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        return row.querySelector(".msg-content");
+      }
+
+      function addThinking() {
+        if (emptyState) emptyState.remove();
+        const row = document.createElement("div");
+        row.className = "msg-row";
+        row.innerHTML = \`
+          <div class="msg-inner">
+            <div class="avatar assistant">AI</div>
+            <div class="thinking"><span></span><span></span><span></span></div>
+          </div>\`;
+        chatWindow.appendChild(row);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+        return row;
+      }
+
+      async function sendMessage() {
+        const text = textarea.value.trim();
+        if (!text) return;
+
+        addMessage("user", text);
+        textarea.value = "";
+        textarea.style.height = "auto";
+        sendBtn.disabled = true;
+
+        const thinkingRow = addThinking();
 
         try {
           const response = await fetch("/api/chat", {
@@ -263,13 +362,14 @@ const server = http.createServer(async (req, res) => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: text }),
           });
-
           const data = await response.json();
-          status.textContent = response.ok ? data.reply : "오류: " + data.error;
-        } catch (error) {
-          status.textContent = "요청 실패: " + error.message;
+          thinkingRow.remove();
+          addMessage("assistant", response.ok ? data.reply : "오류: " + data.error);
+        } catch (err) {
+          thinkingRow.remove();
+          addMessage("assistant", "요청 실패: " + err.message);
         }
-      });
+      }
     </script>
   </body>
 </html>`);
