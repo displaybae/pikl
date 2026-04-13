@@ -46,7 +46,17 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
   `);
+  // 7일 지난 세션 자동 삭제
+  const { rowCount } = await pool.query(
+    "DELETE FROM messages WHERE created_at < NOW() - INTERVAL '7 days'"
+  );
+  if (rowCount > 0) console.log(`Cleaned up ${rowCount} old messages`);
   console.log("DB ready");
+}
+
+async function deleteSession(sessionId) {
+  if (!pool) return;
+  await pool.query("DELETE FROM messages WHERE session_id = $1", [sessionId]);
 }
 
 async function getHistory(sessionId) {
@@ -156,6 +166,18 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "POST" && req.url === "/api/chat") {
     await handleChat(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/session/delete") {
+    try {
+      const body = await readJsonBody(req);
+      const sessionId = String(body.sessionId || "").trim();
+      if (sessionId) await deleteSession(sessionId);
+      sendJson(res, 200, { ok: true });
+    } catch {
+      sendJson(res, 400, { error: "Invalid request." });
+    }
     return;
   }
 
@@ -298,9 +320,25 @@ const server = http.createServer(async (req, res) => {
       }
       #empty-state h2 { font-size: 22px; color: #ececec; font-weight: 600; }
       #empty-state p { font-size: 14px; }
+      #new-chat-btn {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        background: #2f2f2f;
+        border: 1px solid #3f3f3f;
+        color: #ececec;
+        border-radius: 8px;
+        padding: 7px 14px;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      #new-chat-btn:hover { background: #3f3f3f; }
     </style>
   </head>
   <body>
+    <button id="new-chat-btn">새 대화</button>
     <div id="chat-window">
       <div id="empty-state">
         <h2>pikl chat</h2>
@@ -344,6 +382,18 @@ const server = http.createServer(async (req, res) => {
       });
 
       sendBtn.addEventListener("click", sendMessage);
+
+      document.getElementById("new-chat-btn").addEventListener("click", async () => {
+        await fetch("/api/session/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+        sessionId = crypto.randomUUID();
+        localStorage.setItem("pikl_session", sessionId);
+        chatWindow.innerHTML = '<div id="empty-state"><h2>pikl chat</h2><p>무엇이든 물어보세요.</p></div>';
+        emptyState = document.getElementById("empty-state");
+      });
 
       function renderText(text) {
         return text
