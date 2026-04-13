@@ -320,7 +320,7 @@ const server = http.createServer(async (req, res) => {
       function renderText(text) {
         return text
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-          .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#93c5fd">$1</strong>');
+          .replace(/\\*\\*(.+?)\\*\\*/g, '<strong style="color:#93c5fd">$1</strong>');
       }
 
       function addMessage(role, text) {
