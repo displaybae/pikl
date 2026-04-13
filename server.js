@@ -46,9 +46,9 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
   `);
-  // 7일 지난 세션 자동 삭제
+  // 2시간 지난 세션 자동 삭제 (fallback)
   const { rowCount } = await pool.query(
-    "DELETE FROM messages WHERE created_at < NOW() - INTERVAL '7 days'"
+    "DELETE FROM messages WHERE created_at < NOW() - INTERVAL '2 hours'"
   );
   if (rowCount > 0) console.log(`Cleaned up ${rowCount} old messages`);
   console.log("DB ready");
@@ -388,6 +388,12 @@ const server = http.createServer(async (req, res) => {
       });
 
       sendBtn.addEventListener("click", sendMessage);
+
+      // 탭 닫거나 페이지 떠날 때 세션 즉시 삭제
+      window.addEventListener("beforeunload", () => {
+        navigator.sendBeacon("/api/session/delete", new Blob([JSON.stringify({ sessionId })], { type: "application/json" }));
+        localStorage.removeItem("pikl_session");
+      });
 
       document.getElementById("new-chat-btn").addEventListener("click", async () => {
         await fetch("/api/session/delete", {
