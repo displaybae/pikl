@@ -118,7 +118,7 @@ async function handleChat(req, res) {
     }
 
     sendJson(res, 200, {
-      reply: data.output_text || "No text returned.",
+      reply: data.output?.[0]?.content?.[0]?.text || "No text returned.",
     });
   } catch (error) {
     sendJson(res, 500, {
