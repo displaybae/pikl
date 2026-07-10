@@ -832,8 +832,10 @@ class Handler(BaseHTTPRequestHandler):
             uid = str(row["id"])
             is_admin = bool(row["is_admin"])
             db.log_event(uid, "signup" if is_new else "login", {"nickname": nickname})
-            # NEW user → seed the owner's default wardrobe once (best-effort, non-blocking).
-            if is_new:
+            # NEW user → optionally seed the owner's default wardrobe (best-effort, non-blocking).
+            # Disabled by default so new users start with an EMPTY closet (privacy — they must not
+            # see the owner's personal items). Re-enable by setting env SEED_DEFAULTS=1.
+            if is_new and os.environ.get("SEED_DEFAULTS", "").lower() in ("1", "true", "yes"):
                 seed_default_wardrobe({"user_id": uid, "nickname": nickname})
             token = auth.make_token(uid, nickname, is_admin)
             return self._json(200, {"token": token, "nickname": nickname, "is_admin": is_admin})
