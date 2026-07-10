@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>옷장 노드 에디터</title>
+<style>
+  :root { --text:#1d1d1f; --dim:#86868b; --accent:#0071e3; --err:#ff453a;
+    --glass:rgba(255,255,255,.58); --hairline:rgba(0,0,0,.08); }
+  * { box-sizing:border-box; margin:0; }
+  body { color:var(--text); font-family:-apple-system,'SF Pro Text','Apple SD Gothic Neo',sans-serif;
+    overflow:hidden; height:100vh; display:flex; flex-direction:column; background:#f5f5f7;
+    -webkit-font-smoothing:antialiased; }
+  body::before { content:''; position:fixed; inset:-20%; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(40% 50% at 15% 20%, rgba(125,170,255,.35), transparent 70%),
+      radial-gradient(35% 45% at 85% 15%, rgba(255,170,214,.28), transparent 70%),
+      radial-gradient(45% 55% at 70% 85%, rgba(170,225,255,.30), transparent 70%),
+      radial-gradient(30% 40% at 25% 80%, rgba(215,180,255,.25), transparent 70%);
+    filter:blur(40px); }
+  #toolbar { display:flex; gap:8px; align-items:center; padding:12px 18px; z-index:5; flex-wrap:wrap;
+    background:rgba(255,255,255,.55); backdrop-filter:blur(24px) saturate(180%);
+    -webkit-backdrop-filter:blur(24px) saturate(180%); border-bottom:1px solid var(--hairline); }
+  #toolbar .title { font-weight:600; font-size:15px; margin-right:10px; letter-spacing:-.02em; }
+  #toolbar button { background:rgba(255,255,255,.7); color:var(--text); border:1px solid var(--hairline);
+    border-radius:980px; padding:7px 15px; font-size:13px; cursor:pointer; font-family:inherit;
+    transition:all .15s ease; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  #toolbar button:hover { background:#fff; transform:translateY(-1px); box-shadow:0 3px 8px rgba(0,0,0,.08); }
+  #toolbar #run { background:var(--accent); color:#fff; font-weight:600; border:none; padding:7px 24px; }
+  #tabs { display:flex; gap:4px; }
+  #tabs .tab { padding:5px 13px; font-size:12px; }
+  #tabs .tab.active { background:rgba(0,113,227,.12); border-color:rgba(0,113,227,.4);
+    color:var(--accent); font-weight:600; }
+  #tabs .tab.del { color:var(--err); }
+  #toolbar #run:hover { background:#0077ed; }
+  #toolbar #run:disabled { opacity:.4; transform:none; }
+  #status { margin-left:auto; font-size:12px; color:var(--dim); }
+  #viewport { flex:1; overflow:auto; position:relative; z-index:1; }
+  #canvas { width:6000px; height:6000px; position:relative;
+    background-image:radial-gradient(circle, rgba(0,0,0,.10) 1px, transparent 1px); background-size:26px 26px; }
+  svg#wires { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  svg#wires path { stroke:rgba(0,113,227,.45); stroke-width:2; fill:none; pointer-events:stroke; cursor:pointer; }
+  svg#wires path:hover { stroke:var(--err); }
+  svg#wires path.temp { stroke:var(--accent); stroke-dasharray:6 4; pointer-events:none; }
+  .node { position:absolute; width:232px; background:var(--glass);
+    backdrop-filter:blur(28px) saturate(180%); -webkit-backdrop-filter:blur(28px) saturate(180%);
+    border:1px solid rgba(255,255,255,.75); border-radius:18px;
+    box-shadow:0 10px 32px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.6); user-select:none;
+    transition:box-shadow .2s ease; }
+  .node.running { box-shadow:0 0 0 3px rgba(0,113,227,.25), 0 10px 32px rgba(0,113,227,.18); }
+  .node.error { box-shadow:0 0 0 3px rgba(255,69,58,.25), 0 10px 32px rgba(0,0,0,.10); }
+  .node .head { padding:10px 14px 8px; font-size:13px; font-weight:600; letter-spacing:-.01em;
+    cursor:grab; display:flex; justify-content:space-between; align-items:center;
+    border-bottom:1px solid var(--hairline); }
+  .node .head .del { cursor:pointer; color:var(--dim); font-weight:400; padding:0 2px; font-size:12px; }
+  .node .head .del:hover { color:var(--err); }
+  .node .body { padding:10px 12px 12px; font-size:12px; display:flex; flex-direction:column; gap:8px; }
+  .node select, .node input[type=text], .node textarea { width:100%; background:rgba(255,255,255,.75);
+    color:var(--text); border:1px solid var(--hairline); border-radius:10px; padding:7px 9px;
+    font-size:12px; font-family:inherit; outline:none; transition:border-color .15s, box-shadow .15s; }
+  .node select:focus, .node input[type=text]:focus, .node textarea:focus {
+    border-color:rgba(0,113,227,.5); box-shadow:0 0 0 3px rgba(0,113,227,.12); }
+  .node textarea { resize:vertical; min-height:44px; }
+  .node .thumb { width:100%; border-radius:12px; display:block; cursor:pointer;
+    box-shadow:0 2px 10px rgba(0,0,0,.08); }
+  .node .meta { font-size:11px; color:var(--dim); line-height:1.4; }
+  .node .meta.verifying { color:var(--accent); animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  .node .err-msg { font-size:11px; color:var(--err); word-break:break-all; }
+  .node .upload-btn { background:rgba(255,255,255,.5); border:1px dashed rgba(0,0,0,.18);
+    border-radius:12px; color:var(--dim); padding:18px 0; text-align:center; cursor:pointer;
+    font-size:12px; transition:all .15s; }
+  .node .upload-btn:hover { background:rgba(255,255,255,.85); border-color:var(--accent); color:var(--accent); }
+  .node .save-btn { background:var(--accent); color:#fff; border:none; border-radius:980px; padding:7px;
+    font-weight:600; cursor:pointer; font-size:12px; font-family:inherit; transition:background .15s; }
+  .node .save-btn:hover { background:#0077ed; }
+  .node .tweak-btn { background:rgba(255,255,255,.7); color:var(--accent); border:1px solid var(--hairline);
+    border-radius:980px; padding:6px; font-weight:600; cursor:pointer; font-size:12px;
+    font-family:inherit; transition:background .15s; }
+  .node .tweak-btn:hover { background:#fff; }
+  .node .loading { display:flex; flex-direction:column; align-items:center; gap:8px; padding:20px 0; }
+  .node .loading .ring { width:26px; height:26px; border-radius:50%;
+    border:3px solid rgba(0,113,227,.15); border-top-color:var(--accent);
+    animation:spin .8s linear infinite; }
+  .node .loading .tsec { font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .port { position:absolute; width:13px; height:13px; border-radius:50%; background:var(--accent);
+    border:2.5px solid #fff; box-shadow:0 1px 4px rgba(0,113,227,.4); cursor:crosshair; z-index:3; }
+  .port.in { left:-7px; }
+  .port.out { right:-7px; }
+  .port-label { position:absolute; font-size:10px; color:var(--dim); white-space:nowrap; pointer-events:none; }
+  #wd-overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:40;
+    background:rgba(245,245,247,.55); backdrop-filter:blur(24px) saturate(160%);
+    -webkit-backdrop-filter:blur(24px) saturate(160%); }
+  #wd-panel { width:min(960px,92vw); max-height:84vh; display:flex; flex-direction:column;
+    background:rgba(255,255,255,.72); backdrop-filter:blur(30px) saturate(180%);
+    -webkit-backdrop-filter:blur(30px) saturate(180%); border:1px solid rgba(255,255,255,.8);
+    border-radius:24px; box-shadow:0 30px 80px rgba(0,0,0,.18); overflow:hidden; }
+  #wd-head { display:flex; align-items:center; gap:10px; padding:16px 22px; font-weight:600;
+    font-size:15px; letter-spacing:-.02em; border-bottom:1px solid var(--hairline); }
+  #wd-head #wd-count { color:var(--dim); font-weight:400; font-size:12px; }
+  #wd-head .wd-close { margin-left:auto; cursor:pointer; color:var(--dim); font-weight:400; }
+  #wd-head .wd-close:hover { color:var(--text); }
+  #wd-grid { padding:18px 22px 22px; overflow:auto; display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:14px; }
+  .wd-card { background:rgba(255,255,255,.8); border:1px solid var(--hairline); border-radius:16px;
+    padding:8px; display:flex; flex-direction:column; gap:6px; box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .wd-card img { width:100%; aspect-ratio:1; object-fit:contain; background:#fff;
+    border-radius:10px; cursor:zoom-in; }
+  .wd-card input { border:1px solid transparent; background:transparent; border-radius:8px;
+    padding:5px 7px; font-size:12px; font-family:inherit; text-align:center; outline:none;
+    color:var(--text); transition:all .15s; }
+  .wd-card input:hover { border-color:var(--hairline); }
+  .wd-card input:focus { border-color:rgba(0,113,227,.5); background:rgba(255,255,255,.9);
+    box-shadow:0 0 0 3px rgba(0,113,227,.12); }
+  .wd-actions { display:flex; gap:6px; }
+  .wd-actions button { flex:1; border:1px solid var(--hairline); background:rgba(255,255,255,.7);
+    border-radius:980px; padding:5px 0; font-size:11px; cursor:pointer; font-family:inherit;
+    color:var(--text); transition:background .15s; }
+  .wd-actions button:hover { background:#fff; }
+  .wd-actions .wd-del { flex:0 0 auto; padding:5px 12px; color:var(--err); }
+  .wd-empty { grid-column:1/-1; text-align:center; color:var(--dim); padding:40px 0; font-size:13px; }
+  .lightbox { position:fixed; inset:0; background:rgba(245,245,247,.75);
+    backdrop-filter:blur(30px) saturate(160%); -webkit-backdrop-filter:blur(30px) saturate(160%);
+    display:none; align-items:center; justify-content:center; z-index:50; cursor:zoom-out; }
+  .lightbox img { max-width:92vw; max-height:92vh; border-radius:16px; box-shadow:0 30px 80px rgba(0,0,0,.25); }
+</style>
+  #login-gate { position:fixed; inset:0; z-index:100; display:flex; align-items:center;
+    justify-content:center; background:rgba(245,245,247,.9); backdrop-filter:blur(30px) saturate(160%);
+    -webkit-backdrop-filter:blur(30px) saturate(160%); }
+  #login-card { width:min(360px,90vw); background:rgba(255,255,255,.8); border:1px solid rgba(255,255,255,.85);
+    border-radius:24px; box-shadow:0 30px 80px rgba(0,0,0,.18); padding:32px 28px; display:flex;
+    flex-direction:column; gap:14px; text-align:center; }
+  #login-card h2 { font-size:19px; font-weight:600; letter-spacing:-.02em; }
+  #login-card p { font-size:13px; color:var(--dim); }
+  #login-card input { border:1px solid var(--hairline); border-radius:12px; padding:11px 13px;
+    font-size:14px; font-family:inherit; outline:none; text-align:center; }
+  #login-card input:focus { border-color:rgba(0,113,227,.5); box-shadow:0 0 0 3px rgba(0,113,227,.12); }
+  #login-card button { background:var(--accent); color:#fff; border:none; border-radius:980px;
+    padding:11px; font-weight:600; font-size:14px; cursor:pointer; font-family:inherit; }
+  #login-err { font-size:12px; color:var(--err); min-height:14px; }
+</style>
+</head>
+<body>
+<div id="login-gate">
+  <div id="login-card">
+    <h2>디지털 옷장</h2>
+    <p>닉네임을 입력하고 시작하세요</p>
+    <input id="login-nick" type="text" placeholder="닉네임" maxlength="40"
+      onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()">입장</button>
+    <div id="login-err"></div>
+  </div>
+</div>
+<div id="toolbar">
+  <span class="title">Wardrobe</span>
+  <span id="tabs"></span>
+  <span style="width:1px;height:18px;background:var(--hairline)"></span>
+  <button onclick="addNode('upload')">사진</button>
+  <button onclick="openWardrobe()">옷장</button>
+  <button onclick="addNode('generate')">생성</button>
+  <button onclick="addNode('extract')">옷 추출</button>
+  <button onclick="addNode('combine')">조합</button>
+  <button onclick="addNode('edit')">뒤틀기</button>
+  <button onclick="addNode('save')">저장</button>
+  <button id="run" onclick="runGraph()">실행</button>
+  <button onclick="clearGraph()" title="전체 삭제">비우기</button>
+  <button onclick="sendFeedback()" title="피드백 보내기">피드백</button>
+  <span id="whoami" style="font-size:12px;color:var(--dim)"></span>
+  <span id="spend" style="font-size:12px;color:var(--accent)"></span>
+  <span id="status">노드를 추가하고 포트를 드래그해서 연결 → 실행</span>
+</div>
+<div id="viewport">
+  <div id="canvas">
+    <svg id="wires"></svg>
+  </div>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+<div class="lightbox" id="lightbox" onclick="this.style.display='none'"><img id="lightbox-img"></div>
+<div id="wd-overlay" onclick="if(event.target===this)this.style.display='none'">
+  <div id="wd-panel">
+    <div id="wd-head"><span>옷장</span><span id="wd-count"></span>
+      <span class="wd-close" onclick="document.getElementById('wd-overlay').style.display='none'">✕</span></div>
+    <div id="wd-grid"></div>
+  </div>
+</div>
+
+<script>
+// ── auth: nickname gate + bearer token on every /api call ────────────────────
+let AUTH = { token: localStorage.getItem('ig-token') || '', nickname: '', is_admin: false };
+const _origFetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  if (typeof url === 'string' && url.startsWith('/api/') && AUTH.token) {
+    opts = { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + AUTH.token } };
+  }
+  return _origFetch(url, opts);
+};
+async function doLogin() {
+  const nick = document.getElementById('login-nick').value.trim();
+  const errEl = document.getElementById('login-err');
+  if (!nick) { errEl.textContent = '닉네임을 입력해줘'; return; }
+  errEl.textContent = '';
+  try {
+    const d = await _origFetch('/api/login', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname: nick }) })
+      .then(r => r.json());
+    if (d.error) { errEl.textContent = d.error; return; }
+    AUTH = { token: d.token, nickname: d.nickname, is_admin: d.is_admin };
+    localStorage.setItem('ig-token', d.token);
+    localStorage.setItem('ig-nick', d.nickname);
+    document.getElementById('login-gate').style.display = 'none';
+    document.getElementById('whoami').textContent = d.nickname + (d.is_admin ? ' (admin)' : '');
+    boot();
+  } catch (e) { errEl.textContent = '로그인 실패: ' + e.message; }
+}
+async function sendFeedback() {
+  const msg = prompt('피드백을 남겨줘 (버그, 요청사항 등)');
+  if (!msg || !msg.trim()) return;
+  const d = await fetch('/api/feedback', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: msg.trim() }) })
+    .then(r => r.json()).catch(() => ({ error: 'network' }));
+  setStatus(d && d.ok ? '피드백 고마워!' : '피드백 전송 실패');
+}
+
+const GARMENTS = {
+  "상의": "top / shirt", "아우터": "outer layer (jacket, coat, cardigan)", "하의": "bottoms (pants, skirt)",
+  "원피스": "dress", "신발": "shoes", "모자": "hat / cap", "가방": "bag", "액세서리": "accessories (jewelry, watch, glasses)",
+};
+const DEFS = {
+  upload:   { title:"사진",   ins:[], out:true },
+  wardrobe: { title:"옷장",   ins:[], out:true },
+  generate: { title:"생성",   ins:[], out:true },
+  extract:  { title:"옷 추출", ins:["사진"], out:true },
+  combine:  { title:"조합",   ins:["사람","옷 1","옷 2","옷 3","옷 4"], out:true },
+  edit:     { title:"뒤틀기", ins:["사진","참조(선택)"], out:true },
+  save:     { title:"저장",   ins:["이미지"], out:false },
+};
+
+let nodes = [], edges = [], nextId = 1, totalCost = 0;
+const canvas = document.getElementById('canvas'), wiresSvg = document.getElementById('wires');
+const statusEl = document.getElementById('status');
+
+function setStatus(t) { statusEl.textContent = t; }
+
+function addNode(type, x, y) {
+  const vp = document.getElementById('viewport');
+  const n = { id: nextId++, type, params: {}, result: null, sig: null,
+    x: x ?? vp.scrollLeft + 80 + Math.random()*120, y: y ?? vp.scrollTop + 90 + Math.random()*120 };
+  if (type === 'extract') { n.params.garment = '상의'; n.params.auto = true; }
+  nodes.push(n); renderNode(n); drawWires(); persist();
+  return n;
+}
+
+function removeNode(id) {
+  nodes = nodes.filter(n => n.id !== id);
+  edges = edges.filter(e => e.from !== id && e.to !== id);
+  document.getElementById('node-' + id)?.remove();
+  drawWires(); persist();
+}
+
+function clearGraph() {
+  if (!confirm('노드 전부 지울까?')) return;
+  nodes = []; edges = [];
+  canvas.querySelectorAll('.node').forEach(el => el.remove());
+  drawWires(); persist();
+}
+
+function renderNode(n) {
+  const def = DEFS[n.type];
+  const el = document.createElement('div');
+  el.className = 'node'; el.id = 'node-' + n.id;
+  el.style.left = n.x + 'px'; el.style.top = n.y + 'px';
+
+  let body = '';
+  if (n.type === 'upload') {
+    body = `<div class="upload-btn" onclick="pickImage(${n.id})">클릭해서 사진 선택</div><div class="preview"></div>
+      <button class="save-btn" onclick="scanNode(${n.id})">전체 분해</button>`;
+  } else if (n.type === 'wardrobe') {
+    body = `<select onchange="loadWardrobeItem(${n.id}, this.value)"><option value="">옷 선택…</option></select>
+      <div class="preview"></div>`;
+  } else if (n.type === 'generate') {
+    body = `<textarea placeholder="만들 이미지 설명 (영어 권장)" oninput="setParam(${n.id},'text',this.value)">${n.params.text||''}</textarea>
+      <select onchange="setParam(${n.id},'aspect',this.value)">
+        ${['auto','1:1','3:4','4:3','9:16','16:9'].map(a=>`<option ${n.params.aspect===a?'selected':''}>${a}</option>`).join('')}
+      </select><div class="preview"></div>`;
+  } else if (n.type === 'extract') {
+    body = `<select onchange="setParam(${n.id},'garment',this.value)">
+        ${Object.keys(GARMENTS).map(g=>`<option ${n.params.garment===g?'selected':''}>${g}</option>`).join('')}
+      </select>
+      <input type="text" placeholder="추가 지시 (선택)" value="${n.params.extra||''}" oninput="setParam(${n.id},'extra',this.value)">
+      <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+        <input type="checkbox" ${n.params.auto?'checked':''} onchange="setParam(${n.id},'auto',this.checked)">
+        사전분석 후 추출</label>
+      <div class="preview"></div>`;
+  } else if (n.type === 'combine') {
+    body = `<textarea placeholder="추가 지시 (선택) 예: full body, studio background" oninput="setParam(${n.id},'text',this.value)">${n.params.text||''}</textarea><div class="preview"></div>`;
+  } else if (n.type === 'edit') {
+    body = `<textarea placeholder="고치고 싶은 부분을 한국어로 편하게 (예: 상의를 오버핏으로, 가방 빼줘, 배경을 해변으로)" oninput="setParam(${n.id},'text',this.value)">${n.params.text||''}</textarea><div class="preview"></div>`;
+  } else if (n.type === 'save') {
+    body = `<input type="text" placeholder="파일 이름" value="${n.params.name||''}" oninput="setParam(${n.id},'name',this.value)">
+      <div class="preview"></div>
+      <button class="save-btn" onclick="saveNode(${n.id})">옷장에 저장</button>`;
+  }
+
+  if (def.out && n.type !== 'edit')
+    body += `<button class="tweak-btn" onclick="tweakNode(${n.id})">뒤틀기</button>`;
+  if (['generate','extract','combine','edit'].includes(n.type))
+    body += `<button class="tweak-btn rerun-btn" onclick="rerunNode(${n.id})">${n.result ? '다시 생성' : '생성'}</button>`;
+  el.innerHTML = `<div class="head"><span>${def.title}</span><span class="del" onclick="removeNode(${n.id})">✕</span></div>
+    <div class="body">${body}</div>`;
+
+  def.ins.forEach((label, i) => {
+    const p = document.createElement('div');
+    p.className = 'port in'; p.dataset.node = n.id; p.dataset.port = i;
+    p.style.top = (38 + i * 22) + 'px';
+    const lb = document.createElement('div');
+    lb.className = 'port-label'; lb.textContent = label;
+    lb.style.left = '10px'; lb.style.top = (37 + i * 22) + 'px';
+    el.append(p, lb);
+  });
+  if (def.out) {
+    const p = document.createElement('div');
+    p.className = 'port out'; p.dataset.node = n.id;
+    p.style.top = '38px';
+    el.append(p);
+  }
+
+  canvas.appendChild(el);
+  if (n.type === 'wardrobe') refreshWardrobeSelect(n);
+  el.querySelector('.head').addEventListener('mousedown', e => {
+    if (e.target.classList.contains('del')) return;
+    const sx = e.clientX, sy = e.clientY, ox = n.x, oy = n.y;
+    const move = ev => { n.x = ox + ev.clientX - sx; n.y = oy + ev.clientY - sy;
+      el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; drawWires(); };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); persist(); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+  updatePreview(n);
+}
+
+function setParam(id, key, val) { const n = nodes.find(n => n.id === id); n.params[key] = val; persist(); }
+
+async function rerunNode(id) {
+  // 이 노드 하나만 실행 — 입력은 연결된 노드의 현재 결과를 그대로 사용
+  const n = nodes.find(n => n.id === id);
+  n.sig = null; n.savedSig = null;
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  try {
+    const ran = await runNode(n);
+    setStatus(ran ? `완료 · 이번 세션 $${totalCost.toFixed(3)}` : (n.errMsg || '실행할 게 없어'));
+    persist(); refreshSpend();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function tweakNode(id) {
+  const src = nodes.find(n => n.id === id);
+  const e = addNode('edit', src.x + 300, src.y + 40);
+  edges.push({ from: id, to: e.id, toPort: 0 });
+  drawWires(); persist();
+  document.querySelector(`#node-${e.id} textarea`)?.focus();
+  setStatus('한국어로 고칠 부분을 쓰고 실행을 눌러줘');
+}
+
+// 참조(ref) → <img src>. r2://key 는 /img/key 패스스루로, 로컬 경로는 그대로.
+function refToSrc(ref) {
+  if (!ref) return '';
+  if (ref.startsWith('r2://')) return '/img/' + ref.slice(5).split('/').map(encodeURIComponent).join('/');
+  return ref;
+}
+
+async function refreshWardrobeSelect(n) {
+  const sel = document.querySelector(`#node-${n.id} select`); if (!sel) return;
+  const d = await fetch('/api/wardrobe').then(r => r.json());
+  sel.innerHTML = '<option value="">옷 선택…</option>' +
+    (d.items || []).map(it => `<option value="${it.ref}" ${n.params.ref===it.ref?'selected':''}>${it.file.replace(/^\d{8}_\d{6}_/,'')}</option>`).join('');
+}
+
+async function loadWardrobeItem(id, ref) {
+  const n = nodes.find(n => n.id === id);
+  n.params.ref = ref;
+  if (!ref) { n.result = null; n.sig = null; updatePreview(n); persist(); return; }
+  // 참조만 보관 — 서버가 잡에 넣을 때 풀해상도로 해석함
+  n.result = ref;
+  n.sig = 'wardrobe:' + ref;
+  updatePreview(n); persist();
+}
+
+async function openWardrobe() {
+  const d = await fetch('/api/wardrobe').then(r => r.json());
+  const items = d.items || [];
+  document.getElementById('wd-count').textContent = items.length + '개';
+  document.getElementById('wd-grid').innerHTML = items.map(it => {
+    const disp = it.file.replace(/^\d{8}_\d{6}_/, '').replace(/\.(png|jpe?g)$/i, '');
+    const src = refToSrc(it.ref);
+    return `<div class="wd-card">
+      <img src="${src}" loading="lazy"
+        onclick="document.getElementById('lightbox-img').src=this.src;document.getElementById('lightbox').style.display='flex'">
+      <input type="text" value="${disp}" title="클릭해서 이름 변경, Enter로 저장"
+        onkeydown="if(event.key==='Enter')this.blur()" onchange="renameItem('${it.file}', this)">
+      <div class="wd-actions">
+        <button onclick="addWardrobeNode('${it.ref}')">캔버스에 추가</button>
+        <button class="wd-del" onclick="deleteItem('${it.ref}','${it.file}')">삭제</button>
+      </div></div>`;
+  }).join('') || '<div class="wd-empty">아직 저장된 옷이 없어</div>';
+  document.getElementById('wd-overlay').style.display = 'flex';
+}
+
+async function renameItem(file, inp) {
+  const res = await fetch('/api/rename', { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ file, name: inp.value.trim() }) }).then(r => r.json());
+  if (res.error) { setStatus('이름 변경 실패: ' + res.error); openWardrobe(); return; }
+  persist();
+  nodes.filter(n => n.type === 'wardrobe').forEach(refreshWardrobeSelect);
+  setStatus(res.file.replace(/^\d{8}_\d{6}_/, '') + ' 로 변경됨');
+  openWardrobe();
+}
+
+async function deleteItem(ref, file) {
+  if (!confirm((file||'').replace(/^\d{8}_\d{6}_/, '') + ' 삭제할까?')) return;
+  await fetch('/api/delete', { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ ref }) });
+  nodes.filter(n => n.type === 'wardrobe').forEach(refreshWardrobeSelect);
+  openWardrobe();
+}
+
+function addWardrobeNode(ref) {
+  const n = addNode('wardrobe');
+  loadWardrobeItem(n.id, ref);
+  document.getElementById('wd-overlay').style.display = 'none';
+}
+
+function fileToDataURL(f, cb) {
+  // 긴 변 1024px로 리사이즈해서 토큰/용량 절약
+  const r = new FileReader();
+  r.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      cb(c.toDataURL('image/jpeg', 0.92));
+    };
+    img.src = r.result;
+  };
+  r.readAsDataURL(f);
+}
+
+let pickTarget = null;
+function pickImage(id) { pickTarget = id; document.getElementById('file').click(); }
+document.getElementById('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f || pickTarget == null) return;
+  fileToDataURL(f, url => {
+    const n = nodes.find(n => n.id === pickTarget);
+    n.result = url;
+    n.sig = 'upload:' + url.length + url.slice(-40);
+    updatePreview(n); persist();
+  });
+  e.target.value = '';
+});
+
+// 드래그 앤 드랍: 캔버스에 놓으면 사진 노드 생성
+const vp = document.getElementById('viewport');
+vp.addEventListener('dragover', e => e.preventDefault());
+vp.addEventListener('drop', e => {
+  e.preventDefault();
+  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+  const rect = canvas.getBoundingClientRect();
+  files.forEach((f, i) => {
+    fileToDataURL(f, url => {
+      const n = addNode('upload', e.clientX - rect.left + i * 50, e.clientY - rect.top + i * 50);
+      n.result = url;
+      n.sig = 'upload:' + url.length + url.slice(-40);
+      updatePreview(n); persist();
+    });
+  });
+  setStatus(files.length + '장 업로드됨');
+});
+
+// 옷장 갤러리에 놓으면 옷장에 바로 등록 (쇼핑몰 상품샷 등)
+const wdPanel = document.getElementById('wd-panel');
+wdPanel.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); });
+wdPanel.addEventListener('drop', e => {
+  e.preventDefault(); e.stopPropagation();
+  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+  files.forEach(f => {
+    fileToDataURL(f, async url => {
+      setStatus('옷장 등록 중… (착샷이면 자동으로 제품샷 추출, 최대 ~20초)');
+      const d = await fetch('/api/ingest', { method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ image: url, name: f.name.replace(/\.[^.]+$/, '') }) }).then(r => r.json());
+      setStatus(d.error ? '등록 실패: ' + d.error
+        : d.extracted ? `착샷 감지 → 제품샷으로 추출해서 저장됨 ($${d.cost.toFixed(3)})` : '옷장에 저장됨');
+      openWardrobe();
+      nodes.filter(x => x.type === 'wardrobe').forEach(refreshWardrobeSelect);
+    });
+  });
+});
+
+function updatePreview(n) {
+  const el = document.getElementById('node-' + n.id); if (!el) return;
+  const rb = el.querySelector('.rerun-btn');
+  if (rb) rb.textContent = n.result ? '다시 생성' : '생성';
+  const pv = el.querySelector('.preview'); if (!pv) return;
+  pv.innerHTML = '';
+  if (n.result) {
+    const src = refToSrc(n.result);
+    const img = document.createElement('img');
+    img.className = 'thumb'; img.src = src;
+    img.onclick = () => { document.getElementById('lightbox-img').src = src;
+      document.getElementById('lightbox').style.display = 'flex'; };
+    pv.appendChild(img);
+    if (n.meta) { const m = document.createElement('div'); m.className = 'meta'; m.textContent = n.meta; pv.appendChild(m); }
+    if (n.verifying) { const v = document.createElement('div'); v.className = 'meta verifying';
+      v.textContent = '검수 중… 문제 있으면 자동 교체돼'; pv.appendChild(v); }
+  }
+  if (n.errMsg) { const m = document.createElement('div'); m.className = 'err-msg'; m.textContent = n.errMsg; pv.appendChild(m); }
+}
+
+// ---- 와이어 ----
+function portPos(nodeId, kind, idx) {
+  const el = document.querySelector(`#node-${nodeId} .port.${kind}${kind==='in' ? `[data-port="${idx}"]` : ''}`);
+  if (!el) return null;
+  const n = nodes.find(n => n.id === nodeId);
+  return { x: n.x + el.offsetLeft + 7, y: n.y + el.offsetTop + 7 };
+}
+function wirePath(a, b) {
+  const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
+  return `M ${a.x} ${a.y} C ${a.x+dx} ${a.y}, ${b.x-dx} ${b.y}, ${b.x} ${b.y}`;
+}
+function drawWires(tempPath) {
+  wiresSvg.innerHTML = '';
+  for (const e of edges) {
+    const a = portPos(e.from, 'out'), b = portPos(e.to, 'in', e.toPort);
+    if (!a || !b) continue;
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', wirePath(a, b));
+    p.addEventListener('click', () => { edges = edges.filter(x => x !== e); drawWires(); persist(); });
+    wiresSvg.appendChild(p);
+  }
+  if (tempPath) {
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', tempPath); p.setAttribute('class', 'temp');
+    wiresSvg.appendChild(p);
+  }
+}
+
+let dragWire = null;
+canvas.addEventListener('mousedown', e => {
+  if (!e.target.classList.contains('port') || !e.target.classList.contains('out')) return;
+  dragWire = { from: +e.target.dataset.node };
+  e.preventDefault();
+});
+document.addEventListener('mousemove', e => {
+  if (!dragWire) return;
+  const r = canvas.getBoundingClientRect();
+  const a = portPos(dragWire.from, 'out');
+  drawWires(wirePath(a, { x: e.clientX - r.left, y: e.clientY - r.top }));
+});
+document.addEventListener('mouseup', e => {
+  if (!dragWire) return;
+  const t = e.target;
+  if (t.classList?.contains('port') && t.classList.contains('in')) {
+    const to = +t.dataset.node, toPort = +t.dataset.port;
+    if (to !== dragWire.from) {
+      edges = edges.filter(x => !(x.to === to && x.toPort === toPort)); // 입력 포트당 1개
+      edges.push({ from: dragWire.from, to, toPort });
+      persist();
+    }
+  }
+  dragWire = null; drawWires();
+});
+
+// ---- 실행 ----
+function topoSort() {
+  const order = [], visited = new Set(), stack = new Set();
+  function visit(n) {
+    if (visited.has(n.id)) return;
+    if (stack.has(n.id)) throw new Error('순환 연결이 있어 (노드 ' + n.id + ')');
+    stack.add(n.id);
+    for (const e of edges.filter(e => e.to === n.id)) {
+      const src = nodes.find(x => x.id === e.from); if (src) visit(src);
+    }
+    stack.delete(n.id); visited.add(n.id); order.push(n);
+  }
+  nodes.forEach(visit);
+  return order;
+}
+
+function getInputs(n) {
+  const ins = [];
+  for (let i = 0; i < DEFS[n.type].ins.length; i++) {
+    const e = edges.find(e => e.to === n.id && e.toPort === i);
+    const src = e && nodes.find(x => x.id === e.from);
+    ins.push(src ? { result: src.result, sig: src.sig } : null);
+  }
+  return ins;
+}
+
+// 재드로잉이 "입던 형상"을 따라가는 문제 보정: negative 대신 positive 형태 지정 (실검증 완료)
+const FORM_HINTS = {
+  '신발': ' Present the shoes as a brand-new, completely empty pair straight out of the box: the shoe openings are hollow and open, with nothing inside them, standing side by side on the white surface.',
+};
+const SOCK_HINT = ' Present the socks as a brand-new, unworn flat-lay pair: two empty socks laid flat side by side on the white surface, photographed from directly above, soft and slightly slouched, with no feet, legs or ankles inside them.';
+
+function buildJob(n, ins) {
+  const imgs = ins.filter(Boolean).map(i => i.result);
+  if (n.type === 'generate') {
+    if (!n.params.text?.trim()) throw new Error('프롬프트를 입력해줘');
+    return { prompt: n.params.text, images: [], aspect: n.params.aspect, refine_text: true };
+  }
+  if (n.type === 'extract') {
+    if (!ins[0]?.result) throw new Error('사진을 연결해줘');
+    const g = GARMENTS[n.params.garment || '상의'];
+    let p = `Extract only the ${g} worn by the person in the image and render it as e-commerce product photography: the item isolated completely by itself, centered on a pure white background. The output must contain exactly ONE item — the ${g} — and absolutely nothing else: no other clothing, no bags, no shoes, no accessories, no person, no body parts. Reproduce the exact color, fabric, cut and details of the original.`;
+    if (n.params.extra?.trim()) p += ' ' + n.params.extra;
+    let hint = FORM_HINTS[n.params.garment] || '';
+    if (!hint && /sock|양말/i.test(n.params.extra || '')) hint = SOCK_HINT;
+    p += hint;
+    return { prompt: p, images: [ins[0].result], aspect: '1:1',
+      describe: n.params.auto ? g : null, verify: g };
+  }
+  if (n.type === 'combine') {
+    if (!ins[0]?.result) throw new Error('사람 사진을 첫 포트에 연결해줘');
+    const garments = ins.slice(1).filter(Boolean).map(i => i.result);
+    if (!garments.length) throw new Error('옷을 하나 이상 연결해줘');
+    let p = `The first image is a person. The other ${garments.length} image(s) each show one clothing item. Replace ONLY the garments on the person that match the category of the provided item(s), dressing them in these items with realistic draping, lighting and shadows and keeping each item's exact color, pattern and details. Every other garment and accessory the person is wearing must remain EXACTLY as in the first image, completely unchanged. Keep the person's identity, face, hair, body and pose unchanged. Full-body photo.`;
+    if (n.params.text?.trim()) p += ' ' + n.params.text;
+    return { prompt: p, images: [ins[0].result, ...garments], analyze: garments.length };
+  }
+  if (n.type === 'edit') {
+    if (!ins[0]?.result) throw new Error('사진을 연결해줘');
+    if (!n.params.text?.trim()) throw new Error('편집 지시를 입력해줘');
+    return { prompt: n.params.text, images: imgs, refine: true };
+  }
+}
+
+let runningCount = 0;
+
+async function runNode(n) {
+  const el = document.getElementById('node-' + n.id);
+  el.classList.remove('error'); n.errMsg = null;
+  const ins = getInputs(n);
+  if (n.type === 'upload' || n.type === 'wardrobe') { updatePreview(n); return false; }
+  if (n.type === 'save') {
+    n.result = ins[0]?.result || null; n.sig = ins[0]?.sig || null;
+    n.meta = null; updatePreview(n); return false;
+  }
+  let job;
+  try { job = buildJob(n, ins); }
+  catch (err) { n.errMsg = err.message; el.classList.add('error'); updatePreview(n); return false; }
+  const sig = job.describe
+    ? JSON.stringify([n.type, job.prompt, job.aspect, ins.map(i => i?.sig), job.describe])
+    : JSON.stringify([n.type, job.prompt, job.aspect, ins.map(i => i?.sig)]);
+  if (n.sig === sig && n.result) { updatePreview(n); return false; } // 캐시
+  el.classList.add('running');
+  runningCount++;
+  setStatus(`${runningCount}개 노드 실행 중…`);
+  const pv = el.querySelector('.preview');
+  if (pv) pv.innerHTML = '<div class="loading"><div class="ring"></div><div class="tsec">0초</div></div>';
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    const t = el.querySelector('.tsec');
+    if (t) t.textContent = Math.round((Date.now() - t0) / 1000) + '초';
+  }, 1000);
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(job),
+    }).then(r => r.json());
+    if (res.error) throw new Error(res.error);
+    n.result = res.image; n.sig = sig;
+    totalCost += res.cost;
+    n.meta = `${res.elapsed}s · $${res.cost.toFixed(3)}` + (res.desc ? ` · ${res.desc}` : '');
+    if (job.verify || job.analyze) backgroundVerify(n, job, sig, res); // 결과는 즉시, 검수는 뒤에서
+    return true;
+  } catch (err) {
+    n.errMsg = err.message; el.classList.add('error');
+    return false;
+  } finally {
+    clearInterval(timer);
+    runningCount--;
+    if (runningCount > 0) setStatus(`${runningCount}개 노드 실행 중…`);
+    el.classList.remove('running');
+    updatePreview(n);
+  }
+}
+
+async function backgroundVerify(n, job, sig, res) {
+  n.verifying = true; updatePreview(n);
+  try {
+    const v = await fetch('/api/verify_fix', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ prompt: job.prompt, images: job.images, aspect: job.aspect,
+        verify: job.verify, analyze: job.analyze, result: res.image }),
+    }).then(r => r.json());
+    totalCost += v.cost || 0;
+    if (n.sig !== sig) return; // 그새 노드가 바뀌었으면 무시
+    if (v.image) {
+      n.result = v.image;
+      n.meta = `${res.elapsed}+${v.elapsed}s · $${(res.cost + v.cost).toFixed(3)} · 검수 후 재생성됨`;
+      // 연결된 저장 노드에도 교체 반영
+      edges.filter(e => e.from === n.id).forEach(e => {
+        const d = nodes.find(x => x.id === e.to);
+        if (d && d.type === 'save' && d.sig === sig) { d.result = v.image; updatePreview(d); }
+      });
+    }
+  } catch {}
+  finally { n.verifying = false; updatePreview(n); persist(); refreshSpend(); }
+}
+
+async function runGraph() {
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  try {
+    let ran = 0;
+    // 의존성 없는 노드끼리 레벨 단위 병렬 실행 (추출 6개 = 동시에)
+    const pending = topoSort();
+    while (pending.length) {
+      const ready = pending.filter(n =>
+        !edges.some(e => e.to === n.id && pending.some(p => p.id === e.from)));
+      if (!ready.length) break;
+      const results = await Promise.all(ready.map(runNode));
+      ran += results.filter(Boolean).length;
+      ready.forEach(n => pending.splice(pending.indexOf(n), 1));
+    }
+    setStatus(`완료 — ${ran}개 노드 실행 · 이번 세션 $${totalCost.toFixed(3)}`);
+    persist(); refreshSpend();
+  } catch (err) {
+    setStatus('에러: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function scanNode(id) {
+  const n = nodes.find(n => n.id === id);
+  if (!n.result) return setStatus('먼저 사진을 올려줘');
+  setStatus('아이템 인식 중…');
+  try {
+    const d = await fetch('/api/scan', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ image: n.result }),
+    }).then(r => r.json());
+    if (d.error) throw new Error(d.error);
+    d.items.forEach((item, i) => {
+      const ex = addNode('extract', n.x + 310, n.y + i * 400);
+      ex.params.garment = GARMENTS[item.category] ? item.category : '액세서리';
+      ex.params.extra = 'The exact item: ' + item.description;
+      ex.params.auto = true; // 사전분석 후 추출을 기본값으로 (스캔 묘사 + 추출 직전 재분석)
+      const sv = addNode('save', n.x + 610, n.y + i * 400);
+      sv.params.name = item.name;
+      edges.push({from: n.id, to: ex.id, toPort: 0}, {from: ex.id, to: sv.id, toPort: 0});
+      document.getElementById('node-' + ex.id).remove(); renderNode(ex); // params 반영
+      document.getElementById('node-' + sv.id).remove(); renderNode(sv);
+    });
+    drawWires(); persist();
+    setStatus(`${d.items.length}개 아이템 발견 (${d.items.map(i=>i.name).join(', ')}) — ▶ 실행 누르면 추출돼`);
+  } catch (e) { setStatus('스캔 실패: ' + e.message); }
+}
+
+async function saveNode(id) {
+  const n = nodes.find(n => n.id === id);
+  if (!n.result) return setStatus('저장할 이미지가 없어 — 먼저 실행해줘');
+  const name = n.params.name || 'item';
+  if (n.saving) return;
+  if (n.savedSig === (n.sig || n.result) && n.savedName === name)
+    return setStatus('이미 옷장에 저장된 이미지야');
+  n.saving = true;
+  const btn = document.querySelector(`#node-${id} .save-btn`);
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ image: n.result, name }),
+    }).then(r => r.json());
+    setStatus(res.error ? '저장 실패: ' + res.error : 'wardrobe/' + res.file + ' 저장됨');
+    if (!res.error) {
+      n.savedSig = n.sig || n.result; n.savedName = name; persist();
+      nodes.filter(x => x.type === 'wardrobe').forEach(refreshWardrobeSelect);
+    }
+  } finally {
+    n.saving = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---- 영속 (localStorage, 이미지 포함이라 용량 초과 시 그래프 구조만) ----
+let persistTimer = null;
+let currentTab = localStorage.getItem('active-tab') || 'main';
+
+function persistPayload() {
+  return { name: currentTab, ts: Date.now(), nextId,
+    nodes: nodes.map(n => ({...n, errMsg: undefined, saving: undefined, verifying: undefined})), edges };
+}
+function flushPersist() {
+  clearTimeout(persistTimer);
+  fetch('/api/persist', { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(persistPayload()) }).catch(() => {});
+}
+function persist() {
+  // 1차 저장소는 서버 — 용량 제한 없음. 0.8초 디바운스
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(flushPersist, 800);
+}
+
+// ---- 탭 ----
+async function renderTabs() {
+  const d = await fetch('/api/graphs').then(r => r.json());
+  document.getElementById('tabs').innerHTML =
+    d.tabs.map(t => `<button class="tab ${t === currentTab ? 'active' : ''}"
+      onclick="switchTab('${t}')">${t === 'main' ? '메인' : t}</button>`).join('') +
+    `<button class="tab" onclick="newTab()" title="새 탭">+</button>` +
+    (currentTab !== 'main' ? `<button class="tab del" onclick="deleteTab()">탭 삭제</button>` : '');
+}
+function clearCanvasDom() { canvas.querySelectorAll('.node').forEach(el => el.remove()); }
+async function loadTab(name) {
+  currentTab = name; localStorage.setItem('active-tab', name);
+  clearCanvasDom(); nodes = []; edges = []; nextId = 1;
+  let server = null;
+  try { server = await fetch('/api/graph?name=' + encodeURIComponent(name)).then(r => r.json()); } catch {}
+  if (server && server.nodes) {
+    nextId = server.nextId || 1; nodes = server.nodes; edges = server.edges || [];
+    nodes.forEach(n => {
+      if (n.type === 'wardrobe' && n.params.ref)
+        n.result = n.params.ref;
+    });
+  }
+  nodes.forEach(renderNode); drawWires(); renderTabs();
+  if (nodes.length) { // 콘텐츠가 있는 곳으로 스크롤
+    const minX = Math.min(...nodes.map(n => n.x)), minY = Math.min(...nodes.map(n => n.y));
+    const vpEl = document.getElementById('viewport');
+    vpEl.scrollLeft = Math.max(0, minX - 60); vpEl.scrollTop = Math.max(0, minY - 60);
+  }
+}
+async function switchTab(name) {
+  if (name === currentTab) return;
+  flushPersist();
+  await loadTab(name);
+}
+function newTab() {
+  const name = (prompt('새 탭 이름') || '').trim();
+  if (!name) return;
+  flushPersist();
+  currentTab = name; localStorage.setItem('active-tab', name);
+  clearCanvasDom(); nodes = []; edges = []; nextId = 1;
+  drawWires(); flushPersist(); renderTabs();
+  setStatus(`'${name}' 탭 생성됨 — 빈 캔버스`);
+}
+async function deleteTab() {
+  if (currentTab === 'main') return;
+  if (!confirm(`'${currentTab}' 탭을 삭제할까?`)) return;
+  await fetch('/api/graph_delete', { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: currentTab }) });
+  await loadTab('main');
+}
+function restore() {
+  try {
+    const d = JSON.parse(localStorage.getItem('wardrobe-graph'));
+    if (!d) return false;
+    nextId = d.nextId; nodes = d.nodes; edges = d.edges;
+    nodes.forEach(renderNode); drawWires();
+    return nodes.length > 0;
+  } catch { return false; }
+}
+
+async function refreshSpend() {
+  try {
+    const d = await fetch('/api/spend').then(r => r.json());
+    if (d.error) return;
+    const won = Math.round(d.usage * 1400);
+    document.getElementById('spend').textContent =
+      `총 $${d.usage.toFixed(3)} (~${won.toLocaleString()}원) · 잔액 $${(d.credits - d.usage).toFixed(2)}`;
+  } catch {}
+}
+setInterval(refreshSpend, 60000);
+
+async function boot() {
+  refreshSpend();
+  try { // 존재하지 않는 탭에 머물러 있으면 메인으로
+    const d = await fetch('/api/graphs').then(r => r.json());
+    if (!d.tabs.includes(currentTab)) currentTab = 'main';
+  } catch {}
+  await loadTab(currentTab);
+  if (nodes.length) return;
+  if (currentTab === 'main' && restore()) return;
+  if (currentTab !== 'main') return; // 새 탭은 빈 캔버스가 정상
+  // 기본 템플릿: 사진 → 추출 2개 → 조합 ← 사람, → 저장
+  const up = addNode('upload', 60, 80);
+  const ex1 = addNode('extract', 360, 60);
+  const ex2 = addNode('extract', 360, 320); ex2.params.garment = '하의';
+  const person = addNode('upload', 60, 420);
+  const comb = addNode('combine', 660, 200);
+  const sv = addNode('save', 960, 220);
+  edges.push({from: up.id, to: ex1.id, toPort: 0}, {from: up.id, to: ex2.id, toPort: 0},
+    {from: person.id, to: comb.id, toPort: 0}, {from: ex1.id, to: comb.id, toPort: 1},
+    {from: ex2.id, to: comb.id, toPort: 2}, {from: comb.id, to: sv.id, toPort: 0});
+  document.getElementById('node-' + ex2.id)?.remove(); renderNode(ex2); // garment 반영
+  drawWires(); persist();
+}
+
+// 저장된 토큰이 있으면 게이트 건너뛰고 바로 부팅. 없으면 닉네임 입력 대기.
+(async function autoBoot() {
+  if (!AUTH.token) { document.getElementById('login-nick').focus(); return; }
+  try {
+    const d = await fetch('/api/me').then(r => r.json());
+    if (d.error || !d.nickname) throw new Error(d.error || 'no session');
+    AUTH.nickname = d.nickname; AUTH.is_admin = d.is_admin;
+    document.getElementById('login-gate').style.display = 'none';
+    document.getElementById('whoami').textContent = d.nickname + (d.is_admin ? ' (admin)' : '');
+    boot();
+  } catch { // 토큰 만료/무효 → 게이트 다시 노출
+    AUTH.token = ''; localStorage.removeItem('ig-token');
+    document.getElementById('login-nick').focus();
+  }
+})();
+</script>
+</body>
+</html>

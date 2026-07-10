@@ -1,0 +1,4 @@
+# The app itself is Python stdlib + urllib. External deps are only for
+# Postgres analytics and Cloudflare R2 storage.
+psycopg2-binary>=2.9
+boto3>=1.34
