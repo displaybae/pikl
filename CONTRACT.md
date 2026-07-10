@@ -150,7 +150,29 @@ Req: `{"image": "<ref or dataURL>", "name": "<str>"}`
   (per-user, keyed by `user_id`). **Ordered newest-first** so a just-added item appears at
   the TOP of the closet. Only image objects (`.png/.jpg/.jpeg/.webp`) are returned (non-image
   objects are filtered out so they don't render as broken tiles). Display each item with `url`;
-  use `ref` for delete / try-on input.
+  use `ref` for delete / try-on input. **Returns GARMENTS only** — saved person photos live in
+  a separate `models/` collection (see `/api/models`) and never appear here, so the garment
+  picker in try-on stays clean.
+
+## Person photos (models) — savable try-on person sources
+Person/full-body photos are a **separate collection** from garments, stored under the R2
+sub-prefix `imagegen/<user_id>/models/` (local fallback: `./models/`). They are saved
+**AS-IS — no Klein extraction, no VLM** — because they're the *source person* for a try-on,
+not a product shot. Same conventions as the wardrobe: user_id-keyed keyspace, collision-proof
+`<ts>_<uuid6>_` filenames, newest-first + image-only listing. A saved model's `ref` can be
+passed directly as the try-on **person** to `/api/generate` (its `combine` op) — `resolve_img`
+resolves an `r2://.../models/...` ref generically, so no combine change is needed.
+
+### `POST /api/save_person`  (auth)  — save a person/full photo to the models collection
+Req: `{"image": "<ref or dataURL>", "name": "<str>"}`
+→ `200 {"file": "<display name>", "ref": "<ref>", "url": "<loadable url>"}`.
+  Saves the photo as-is to `imagegen/<user_id>/models/`. Logs a `model_save` event.
+→ `400 {"error":"이미지가 없음"}` if `image` is missing.
+
+### `GET /api/models`  (auth)
+→ `200 {"items": [{"file": "<display name>", "ref": "<ref>", "url": "<loadable url>"}, ...]}`
+  Same shape/semantics as `/api/wardrobe` (per-user, newest-first, image-only) but lists the
+  user's saved **person photos**. Display with `url`; use `ref` for delete / as the try-on person.
 
 ## Default wardrobe seeding
 On **new-user creation** (`POST /api/login` for a nickname not yet in `imagegen_users`), the
@@ -168,7 +190,11 @@ Req: `{"file": "<current display name>", "name": "<new name>"}`
 
 ### `POST /api/delete`  (auth)
 Req: `{"ref": "<ref>"}` (or legacy `{"file": "..."}`)
-→ `200 {"ok": true}`. Logs `delete`.
+→ `200 {"ok": true}`. Logs `delete`. Deletes **any of the caller's own objects — wardrobe OR
+  models** — keyed by its R2 key / local path (the models `ref` deletes fine here since it's
+  keyed by the key). **Ownership guard:** an `r2://` key MUST live under the caller's own
+  keyspace (`imagegen/<user_id>/…`); a key belonging to another user → `403
+  {"error":"본인 소유의 항목만 삭제할 수 있어요"}`.
 
 ### `GET /api/graphs`  (auth)  — node-graph tab names (per-nickname)
 → `200 {"tabs": ["main", ...]}`
@@ -274,8 +300,9 @@ The admin dashboard adapts these to its internal camelCase in `admin.js` (`adapt
 
 ## Event types (imagegen_events.type)
 `signup`, `login`, `generate`, `extract`, `combine`, `edit`, `generate_fail`,
-`generate_retry`, `scan`, `wardrobe_save`, `delete`, `graph_save`, `feedback_submit`,
-`chat`. `meta` is JSONB with op-specific details. Logging is best-effort (never blocks/throws).
+`generate_retry`, `scan`, `wardrobe_save`, `model_save`, `delete`, `graph_save`,
+`feedback_submit`, `chat`. `meta` is JSONB with op-specific details. Logging is best-effort
+(never blocks/throws). `model_save` is logged when a person photo is saved via `/api/save_person`.
 The help chatbot logs a `chat` event per turn (`meta:{n_msg, tools, cost}`) and a `chat`
 usage row (its OpenRouter cost); `submit_feedback` from within chat logs `feedback_submit`
 with `meta.via="chat"`.

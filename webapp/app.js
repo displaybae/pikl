@@ -25,13 +25,16 @@ const state = {
   token: null,
   nickname: null,
   isAdmin: false,
-  wardrobe: [],          // [{file, ref, url}]
+  wardrobe: [],          // [{file, ref, url}] — GARMENTS only
+  models: [],            // [{file, ref, url}] — saved person/full photos
   tab: 'closet',
+  closetSeg: 'garments', // 'garments' | 'models' — which closet view is showing
   // add flow
   addImage: null,        // dataURL of uploaded person
   detected: [],          // [{category,name,description, status}]
   // try-on flow
-  personImage: null,
+  personImage: null,     // dataURL (upload) OR storage ref (picked saved model)
+  personRef: null,       // storage ref when the person came from a saved model
   picks: [],             // filenames selected (max 4)
   // help chat
   chat: {
@@ -93,7 +96,8 @@ async function api(path, { method = 'GET', body = null } = {}) {
 
 /* ---------- MOCK backend (used only when fetch throws) ---------- */
 const MOCK = {
-  wardrobe: [], // filenames
+  wardrobe: [], // garment filenames
+  models: [],   // saved person-photo filenames
 };
 function mockImg(seed, w = 480, h = 640) {
   // deterministic placeholder image as a data URL (SVG) — no network needed
@@ -144,9 +148,17 @@ async function mock(path, method, body) {
     MOCK.wardrobe.push(f);
     return { file: f, ref: f, url: wardrobeSrc(f) };
   }
+  if (path === '/api/save_person') {
+    const f = `mockp_${Date.now()}.jpg`;
+    MOCK.models.push(f);
+    return { file: f, ref: f, url: wardrobeSrc(f) };
+  }
+  if (path === '/api/models')
+    return { items: MOCK.models.map(file => ({ file, ref: file, url: wardrobeSrc(file) })) };
   if (path === '/api/delete') {
     const key = body.ref || body.file;
     MOCK.wardrobe = MOCK.wardrobe.filter(x => x !== key);
+    MOCK.models = MOCK.models.filter(x => x !== key);
     return { ok: true };
   }
   if (path === '/api/generate') {
@@ -348,10 +360,28 @@ function renderAddPreview() {
     `<div class="upload-preview">
        <img src="${state.addImage}" alt="업로드한 사진" />
        <button class="re" id="addRe">다른 사진</button>
+       <button class="save-person" id="addSavePerson">이 사진 그대로 저장 (사람)</button>
      </div>`;
   $('#addRe').addEventListener('click', ev => {
     ev.stopPropagation();
     resetAdd();
+  });
+  $('#addSavePerson').addEventListener('click', async ev => {
+    ev.stopPropagation();
+    const b = $('#addSavePerson'); b.disabled = true; b.textContent = '저장 중…';
+    try {
+      // Save the FULL photo as-is to the person-photo collection (no extraction).
+      await api('/api/save_person', {
+        method: 'POST',
+        body: { image: state.addImage, name: `사람_${Date.now()}` },
+      });
+      toast('내 사진에 저장했어요', 'ok');
+      loadModels().catch(() => {});
+      b.textContent = '저장됨 ✓';
+    } catch (err) {
+      b.disabled = false; b.textContent = '이 사진 그대로 저장 (사람)';
+      toast(err.message || '저장에 실패했어요', 'err');
+    }
   });
 }
 function resetAdd() {
@@ -507,7 +537,34 @@ async function loadWardrobe() {
   }));
   return state.wardrobe;
 }
+async function loadModels() {
+  // saved person/full photos — separate collection from garments (never mixed).
+  const d = await api('/api/models');
+  state.models = (d.items || []).map(it => ({
+    file: it.file,
+    ref: it.ref,
+    url: it.url || wardrobeSrc(it.file),
+  }));
+  return state.models;
+}
+
+/* segmented toggle in the closet header: 옷 | 내 사진 */
+$$('#closetSeg .seg-btn').forEach(b =>
+  b.addEventListener('click', () => {
+    if (state.closetSeg === b.dataset.seg) return;
+    state.closetSeg = b.dataset.seg;
+    $$('#closetSeg .seg-btn').forEach(x => x.classList.toggle('on', x === b));
+    renderCloset();
+  }));
+
 async function renderCloset() {
+  // reflect the active segment on the toggle (in case it was set programmatically)
+  $$('#closetSeg .seg-btn').forEach(x => x.classList.toggle('on', x.dataset.seg === state.closetSeg));
+  if (state.closetSeg === 'models') return renderClosetModels();
+  return renderClosetGarments();
+}
+
+async function renderClosetGarments() {
   const body = $('#closetBody');
   const banner = $('#closetBanner');
   // skeletons
@@ -549,6 +606,47 @@ async function renderCloset() {
   renderFeedbackBanner(banner);
 }
 
+async function renderClosetModels() {
+  const body = $('#closetBody');
+  const banner = $('#closetBanner');
+  body.innerHTML =
+    `<div class="closet-grid">${Array.from({ length: 4 }).map(() =>
+      `<div class="g-card"><div class="skeleton"></div></div>`).join('')}</div>`;
+  try {
+    await loadModels();
+  } catch (err) {
+    body.innerHTML = `<div class="empty"><div class="emo">⚠️</div><h3>내 사진을 불러오지 못했어요</h3><p>${esc(err.message)}</p></div>`;
+    banner.innerHTML = '';
+    return;
+  }
+  $('#closetCount').textContent = state.models.length
+    ? `모아둔 사진 ${state.models.length}장` : '입혀보기에 쓸 사람 사진을 모아두세요.';
+  if (!state.models.length) {
+    body.innerHTML =
+      `<div class="empty">
+         <div class="emo">🧍</div>
+         <h3>저장된 사진이 없어요</h3>
+         <p>사람 사진을 담아보세요. 입혀보기에서 사진을 저장하면 여기 모여요.</p>
+         <button class="btn accent" id="emptyToTryon">입혀보기로 가기</button>
+       </div>`;
+    $('#emptyToTryon').addEventListener('click', () => switchTab('tryon'));
+    banner.innerHTML = '';
+    renderFeedbackBanner(banner);
+    return;
+  }
+  const grid = el('div', 'closet-grid');
+  state.models.forEach((g, i) => {
+    const card = el('div', 'g-card');
+    card.style.animationDelay = (i * 40) + 'ms';
+    card.innerHTML = `<img loading="lazy" src="${g.url}" alt="사람 사진" />`;
+    card.addEventListener('click', () => openModel(g));
+    grid.appendChild(card);
+  });
+  body.innerHTML = '';
+  body.appendChild(grid);
+  renderFeedbackBanner(banner);
+}
+
 function openGarment(g) {
   openSheet(
     `<div class="viewer-img"><img src="${g.url}" alt="옷" /></div>
@@ -572,20 +670,65 @@ function openGarment(g) {
   });
 }
 
+function openModel(g) {
+  openSheet(
+    `<div class="viewer-img"><img src="${g.url}" alt="사람 사진" /></div>
+     <div class="btn-row">
+       <button class="btn ghost" id="mUse">이 사진으로 입혀보기</button>
+       <button class="btn danger" id="mDel">삭제</button>
+     </div>`);
+  $('#mUse').addEventListener('click', () => {
+    setPersonFromModel(g);
+    closeSheet();
+    switchTab('tryon');
+    toast('사람 사진을 골랐어요', 'ok');
+  });
+  $('#mDel').addEventListener('click', async () => {
+    const b = $('#mDel'); b.disabled = true; b.textContent = '삭제 중…';
+    try {
+      await api('/api/delete', { method: 'POST', body: { ref: g.ref, file: g.file } });
+      closeSheet();
+      toast('사진을 삭제했어요', 'ok');
+      renderCloset();
+    } catch (err) {
+      b.disabled = false; b.textContent = '삭제';
+      toast(err.message || '삭제에 실패했어요', 'err');
+    }
+  });
+}
+
 /* ============================================================
    5) TRY-ON
    ============================================================ */
 $('#personZone').addEventListener('click', () => {
   if (!state.personImage) $('#filePerson').click();
 });
+$('#personUploadBtn').addEventListener('click', () => $('#filePerson').click());
+$('#personPickBtn').addEventListener('click', openPersonPicker);
 $('#filePerson').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
   try {
     state.personImage = await fileToDataURL(f);
+    state.personRef = null;               // fresh upload — not yet a saved model
     renderPersonZone();
   } catch { toast('사진을 불러오지 못했어요', 'err'); }
 });
+
+/* person `url` to render (a saved model carries a loadable ref, an upload a dataURL) */
+function personDisplaySrc() {
+  if (!state.personImage) return null;
+  if (state.personImage.startsWith('data:')) return state.personImage;
+  return state.personImage;              // saved model: url set alongside the ref
+}
+
+/* set the try-on person from a saved model (its url shows, its ref is the source) */
+function setPersonFromModel(g) {
+  state.personImage = g.url;
+  state.personRef = g.ref;
+  renderPersonZone();
+}
+
 function renderPersonZone() {
   const z = $('#personZone');
   if (!state.personImage) {
@@ -598,13 +741,76 @@ function renderPersonZone() {
     return;
   }
   z.classList.add('hasimg');
+  // "저장" is offered only for a FRESH upload (a dataURL that isn't already a saved model).
+  const canSave = state.personImage.startsWith('data:') && !state.personRef;
+  const saveBtn = canSave
+    ? `<button class="save" id="personSave"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>저장</button>`
+    : '';
   z.innerHTML =
-    `<img src="${state.personImage}" alt="사람 사진" />
-     <button class="re" id="personRe">변경</button>`;
+    `<img src="${esc(personDisplaySrc())}" alt="사람 사진" />
+     <button class="re" id="personRe">변경</button>${saveBtn}`;
   $('#personRe').addEventListener('click', ev => {
     ev.stopPropagation();
-    state.personImage = null; renderPersonZone();
+    state.personImage = null; state.personRef = null; renderPersonZone();
   });
+  if (canSave) {
+    $('#personSave').addEventListener('click', async ev => {
+      ev.stopPropagation();
+      const b = $('#personSave'); b.disabled = true;
+      try {
+        await api('/api/save_person', {
+          method: 'POST',
+          body: { image: state.personImage, name: `사람_${Date.now()}` },
+        });
+        toast('내 사진에 저장했어요', 'ok');
+        loadModels().catch(() => {});     // refresh the models cache
+        b.innerHTML = '저장됨 ✓';
+      } catch (err) {
+        b.disabled = false;
+        toast(err.message || '저장에 실패했어요', 'err');
+      }
+    });
+  }
+}
+
+/* picker sheet: choose a saved person photo as the try-on person */
+async function openPersonPicker() {
+  openSheet(
+    `<h2>내 사진에서 선택</h2>
+     <p class="sub">저장해둔 사람 사진을 골라 입혀보기의 사람으로 써요.</p>
+     <div id="personPickGrid">
+       <div class="closet-grid">${Array.from({ length: 4 }).map(() =>
+         `<div class="g-card"><div class="skeleton"></div></div>`).join('')}</div>
+     </div>`);
+  const grid = $('#personPickGrid');
+  try {
+    await loadModels();
+  } catch (err) {
+    grid.innerHTML = `<div class="empty"><div class="emo">⚠️</div><h3>사진을 불러오지 못했어요</h3><p>${esc(err.message)}</p></div>`;
+    return;
+  }
+  if (!state.models.length) {
+    grid.innerHTML =
+      `<div class="empty" style="padding:36px 20px">
+         <div class="emo">🧍</div>
+         <h3>저장된 사진이 없어요</h3>
+         <p>사람 사진을 담아보세요. 사진을 올린 뒤 "저장"을 누르면 여기 모여요.</p>
+       </div>`;
+    return;
+  }
+  const g = el('div', 'closet-grid');
+  state.models.forEach(m => {
+    const card = el('div', 'g-card');
+    card.innerHTML = `<img loading="lazy" src="${m.url}" alt="사람 사진" />`;
+    card.addEventListener('click', () => {
+      setPersonFromModel(m);
+      closeSheet();
+      toast('사람 사진을 골랐어요', 'ok');
+    });
+    g.appendChild(card);
+  });
+  grid.innerHTML = '';
+  grid.appendChild(g);
 }
 
 async function renderTryon() {
@@ -674,12 +880,14 @@ async function doTryon() {
   if (!state.personImage) { toast('먼저 사람 사진을 올려주세요', 'warn'); return; }
   if (!state.picks.length) { toast('입힐 옷을 골라주세요', 'warn'); return; }
   // Wardrobe garments are passed as storage refs — the backend's resolve_img()
-  // turns them back into image bytes. Only the freshly-uploaded person is a dataURL.
+  // turns them back into image bytes. The person is either a freshly-uploaded
+  // dataURL, or a SAVED MODEL passed by its storage ref (resolve_img handles both).
   const garmentRefs = state.picks.map(f => {
     const g = state.wardrobe.find(x => x.file === f);
     return g.ref || g.url;
   });
-  const images = [state.personImage, ...garmentRefs];
+  const person = state.personRef || state.personImage;
+  const images = [person, ...garmentRefs];
 
   startGen('입혀보는 중', '옷을 입히고 있어요');
   try {

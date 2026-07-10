@@ -336,6 +336,27 @@ a { color: inherit; }
 .tab:active { opacity: .6; }
 
 /* ============================================================
+   SEGMENTED TOGGLE (closet: 옷 | 내 사진)
+   ============================================================ */
+.seg {
+  display: inline-flex; gap: 2px;
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
+  padding: 3px; margin: 0 0 18px;
+  border: 1px solid var(--line-soft);
+}
+.seg-btn {
+  padding: 7px 18px; border-radius: var(--r-pill);
+  font-size: 14px; font-weight: 500; color: var(--ink-soft);
+  transition: color .2s var(--ease), background .2s var(--ease), box-shadow .2s var(--ease);
+}
+.seg-btn.on {
+  background: var(--surface); color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.seg-btn:active { transform: scale(.97); }
+
+/* ============================================================
    CLOSET grid
    ============================================================ */
 .closet-grid {
@@ -410,6 +431,14 @@ a { color: inherit; }
   background: rgba(0,0,0,.5); color: #fff; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   padding: 7px 14px; border-radius: var(--r-pill); font-size: 13px; font-weight: 500;
 }
+/* "이 사진 그대로 저장 (사람)" — save the full photo as a person, no extraction */
+.upload-preview .save-person {
+  position: absolute; left: 12px; bottom: 12px;
+  background: rgba(255,255,255,.92); color: var(--ink); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  padding: 8px 14px; border-radius: var(--r-pill); font-size: 13px; font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+.upload-preview .save-person[disabled] { opacity: .55; pointer-events: none; }
 
 .section-label {
   font-size: 15px; font-weight: 600; color: var(--ink);
@@ -491,6 +520,32 @@ a { color: inherit; }
   background: rgba(0,0,0,.5); color: #fff; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   padding: 6px 12px; border-radius: var(--r-pill); font-size: 12px; font-weight: 500;
 }
+/* small pill "저장" affordance on the person preview (bottom-left) */
+.tryon-person .save {
+  position: absolute; left: 10px; bottom: 10px;
+  background: rgba(255,255,255,.9); color: var(--ink); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  padding: 6px 12px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 5px; box-shadow: var(--shadow-sm);
+}
+.tryon-person .save svg { width: 13px; height: 13px; }
+.tryon-person .save[disabled] { opacity: .55; pointer-events: none; }
+
+/* person-source options (사진 올리기 | 내 사진에서 선택) */
+.person-src {
+  display: flex; gap: 8px; justify-content: center;
+  margin: 12px auto 4px; max-width: 300px;
+}
+.chip-btn {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 12px; border-radius: var(--r-pill);
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line);
+  font-size: 13px; font-weight: 500; letter-spacing: -.01em;
+  box-shadow: var(--shadow-sm);
+  transition: transform .15s var(--ease), background .2s var(--ease);
+}
+.chip-btn:active { transform: scale(.97); background: var(--surface-2); }
+.chip-btn svg { flex: none; color: var(--ink-soft); }
 
 .pick-strip {
   display: flex; gap: 10px; overflow-x: auto;

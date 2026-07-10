@@ -36,9 +36,11 @@ STATIC = os.path.join(BASE, "static")      # legacy node-editor UI (kept at /edi
 WEBAPP = os.path.join(BASE, "webapp")      # consumer frontend (served at /)
 ADMINAPP = os.path.join(BASE, "admin")     # admin dashboard (served at /admin)
 WARDROBE = os.path.join(BASE, "wardrobe")
+MODELS = os.path.join(BASE, "models")     # person/full photos (local FS fallback)
 OUTDIR = os.path.join(BASE, "output")
 os.makedirs(OUTDIR, exist_ok=True)
 os.makedirs(WARDROBE, exist_ok=True)
+os.makedirs(MODELS, exist_ok=True)
 
 # Anonymous fallback identity when DB is off (single-user local dev).
 ANON = {"user_id": None, "nickname": "_local", "is_admin": True}
@@ -147,7 +149,7 @@ def resolve_img(s):
     if s.startswith("/"):
         name = os.path.basename(urllib.parse.unquote(s))
         mime = "image/jpeg" if name.lower().endswith((".jpg", ".jpeg")) else "image/png"
-        for d in (OUTDIR, WARDROBE):
+        for d in (OUTDIR, WARDROBE, MODELS):
             p = os.path.join(d, name)
             if os.path.isfile(p):
                 with open(p, "rb") as f:
@@ -189,7 +191,56 @@ def save_wardrobe(dataurl, name, user):
     return "/wardrobe/" + urllib.parse.quote(fname), fname
 
 
+def save_person(dataurl, name, user):
+    """사람 사진(모델) 저장 — 착샷/전신 사진을 있는 그대로(추출 없이) 별도의
+    `models/` 프리픽스에 담는다. 반환: (참조, 표시용 파일명).
+
+    옷장(garment)과 완전히 분리된 keyspace(`<user_id>/models/`)라서, 입히기의
+    옷 피커에는 절대 섞이지 않는다. save_wardrobe와 동일하게 time_ns + 짧은 uuid로
+    충돌을 방지한다."""
+    name = re.sub(r"[^\w가-힣.-]", "_", name or "model")
+    if not name.lower().endswith((".png", ".jpg", ".jpeg")):
+        name += ".jpg"
+    fname = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}_{name}"
+    raw = base64.b64decode(dataurl.split(",", 1)[1] if dataurl.startswith("data:") else dataurl)
+    if storage.enabled:
+        key = f"{_keyspace(user)}/models/{fname}"
+        ct = "image/jpeg" if fname.lower().endswith((".jpg", ".jpeg")) else "image/png"
+        storage.put_bytes(key, raw, ct)
+        return "r2://" + key, fname
+    d = os.path.join(BASE, "models")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, fname), "wb") as f:
+        f.write(raw)
+    return "/models/" + urllib.parse.quote(fname), fname
+
+
 _IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def list_models(user):
+    """사람 사진(모델) 목록: [{file, ref, url}] — /api/wardrobe와 동일한 shape.
+    이미지 확장자만 + 최신순(reverse) 정렬(방금 담은 사진이 맨 위)."""
+    if storage.enabled:
+        prefix = f"{_keyspace(user)}/models/"
+        out = []
+        for key in storage.list_prefix(prefix):
+            if not key.lower().endswith(_IMG_EXTS):
+                continue
+            ref = "r2://" + key
+            out.append({"file": key[len(prefix):], "ref": ref, "url": display_url(ref)})
+        out.sort(key=lambda x: x["file"], reverse=True)
+        return out
+    d = os.path.join(BASE, "models")
+    if not os.path.isdir(d):
+        return []
+    files = sorted((f for f in os.listdir(d)
+                    if f.lower().endswith(_IMG_EXTS)), reverse=True)
+    out = []
+    for f in files:
+        ref = "/models/" + urllib.parse.quote(f)
+        out.append({"file": f, "ref": ref, "url": ref})
+    return out
 
 
 def list_wardrobe(user):
@@ -539,8 +590,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._bytes(data, ct)
 
         # local FS image serving (fallback when R2 disabled)
-        if path.startswith("/wardrobe/") or path.startswith("/output/"):
-            folder = WARDROBE if path.startswith("/wardrobe/") else OUTDIR
+        if (path.startswith("/wardrobe/") or path.startswith("/output/")
+                or path.startswith("/models/")):
+            folder = (WARDROBE if path.startswith("/wardrobe/")
+                      else MODELS if path.startswith("/models/") else OUTDIR)
             name = os.path.basename(urllib.parse.unquote(path.split("/", 2)[2]))
             fp = os.path.join(folder, name)
             if not os.path.isfile(fp):
@@ -586,6 +639,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/wardrobe":
             return self._json(200, {"items": list_wardrobe(user)})
+
+        if path == "/api/models":
+            return self._json(200, {"items": list_models(user)})
 
         # admin
         if path == "/api/admin/overview":
@@ -668,6 +724,15 @@ class Handler(BaseHTTPRequestHandler):
                 db.log_event(uid, "wardrobe_save", {"file": fname, "via": "save"})
                 return self._json(200, {"file": fname, "ref": ref, "url": display_url(ref)})
 
+            if path == "/api/save_person":
+                # 사람 사진(모델)을 추출 없이 그대로 별도 keyspace(models/)에 저장.
+                if not req.get("image"):
+                    return self._json(400, {"error": "이미지가 없음"})
+                ref, fname = save_person(resolve_img(req["image"]),
+                                         req.get("name") or "model", user)
+                db.log_event(uid, "model_save", {"file": fname})
+                return self._json(200, {"file": fname, "ref": ref, "url": display_url(ref)})
+
             if path == "/api/persist":
                 name = re.sub(r"[^\w가-힣-]", "_", req.pop("name", "main") or "main")
                 if db.enabled and uid:
@@ -717,16 +782,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"file": fname})
 
             if path == "/api/delete":
+                # Deletes any of the CURRENT user's own objects (wardrobe OR models),
+                # keyed by its R2 key / local path. Guards against deleting another
+                # user's key: an r2:// key must live under this user's keyspace.
                 ref = req.get("ref") or req.get("file", "")
                 if isinstance(ref, str) and ref.startswith("r2://"):
+                    key = ref[len("r2://"):]
+                    own_prefix = _keyspace(user) + "/"
+                    if not key.startswith(own_prefix):
+                        return self._json(403, {"error": "본인 소유의 항목만 삭제할 수 있어요"})
                     try:
-                        storage.delete(ref[len("r2://"):])
+                        storage.delete(key)
                     except Exception:
                         pass
                 else:
-                    src = os.path.join(WARDROBE, os.path.basename(ref))
-                    if os.path.isfile(src):
-                        os.remove(src)
+                    # local FS fallback: search the user's wardrobe + models folders.
+                    base = os.path.basename(ref)
+                    for d in (WARDROBE, MODELS):
+                        src = os.path.join(d, base)
+                        if os.path.isfile(src):
+                            os.remove(src)
+                            break
                 db.log_event(uid, "delete", {"ref": str(ref)[:200]})
                 return self._json(200, {"ok": True})
 
