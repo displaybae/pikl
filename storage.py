@@ -112,6 +112,18 @@ def delete(key):
     _c().delete_object(Bucket=R2_BUCKET, Key=key)
 
 
+def copy(src_key, dst_key):
+    """Server-side copy within the bucket (no download/upload round-trip)."""
+    _assert_safe(src_key)
+    _assert_safe(dst_key)
+    _c().copy_object(
+        Bucket=R2_BUCKET,
+        Key=dst_key,
+        CopySource={"Bucket": R2_BUCKET, "Key": src_key},
+    )
+    return dst_key
+
+
 def list_prefix(prefix):
     """Return R2 keys under a prefix (paginated)."""
     _assert_safe(prefix)

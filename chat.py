@@ -126,7 +126,7 @@ TOOLS = [
 # ── 툴 실행기 (각 툴은 현재 user에 대해 실제 데이터로 동작; 피드백 외엔 읽기 전용) ────
 def _tool_get_wardrobe(user):
     import nodeapp
-    items = nodeapp.list_wardrobe(user["nickname"])
+    items = nodeapp.list_wardrobe(user)  # keyed by user_id (falls back to nickname locally)
     names = [it["file"] for it in items]
     return {"count": len(items), "items": names[:60]}
 

@@ -415,12 +415,15 @@ function renderDetected() {
     const emoji = CAT_EMOJI[String(it.category).toLowerCase()] || '👚';
     let btn;
     if (it.status === 'saved') btn = `<div class="dc-act done">담김 ✓</div>`;
-    else if (it.status === 'busy') btn = `<div class="dc-act busy"><span class="mini-spin"></span></div>`;
+    else if (it.status === 'busy') btn = `<div class="dc-act busy">담는 중…</div>`;
     else btn = `<button class="dc-act" data-i="${i}">담기</button>`;
+    // reflect where the saved item came from (착샷 추출 vs 제품컷 그대로)
+    const srcTag = it.status === 'saved' && it.extracted != null
+      ? `<span class="dc-src">${it.extracted ? '착샷에서 추출' : '제품컷'}</span>` : '';
     card.innerHTML =
       `<div class="dc-icon">${emoji}</div>
        <div class="dc-body">
-         <div class="dc-cat">${esc(it.category || '의류')}</div>
+         <div class="dc-cat">${esc(it.category || '의류')}${srcTag}</div>
          <div class="dc-name">${esc(it.name || '이름 없는 옷')}</div>
          <div class="dc-desc">${esc(it.description || '')}</div>
        </div>${btn}`;
@@ -439,18 +442,55 @@ async function extractOne(i) {
   it.status = 'busy'; renderDetected();
   const name = it.name || (it.category || 'garment');
   try {
-    // Prefer the one-shot ingest endpoint (extract + save).
-    const d = await api('/api/ingest', { method: 'POST', body: { image: state.addImage, name } });
+    // Prefer the one-shot ingest endpoint (extract + save). Pass the picked item's
+    // identity so the backend extracts THIS garment, not the most-prominent one.
+    const d = await api('/api/ingest', {
+      method: 'POST',
+      body: {
+        image: state.addImage,
+        name,
+        garment: it.category,            // Korean category from /api/scan
+        description: it.description,      // per-item English description
+      },
+    });
     it.status = 'saved';
+    it.extracted = !!d.extracted;        // reflect on the saved card (추출 vs 제품컷)
     renderDetected();
-    if (d.warning) toast(d.warning, 'warn');
-    toast(`'${name}'을(를) 옷장에 담았어요`, 'ok');
-    // refresh cached wardrobe so the closet is up to date next visit
-    loadWardrobe().catch(() => {});
+    if (d.warning) addQueued('warn', d.warning);
+    addQueued('ok', name);
+    // refresh the wardrobe cache AND repaint the closet if it's the active tab,
+    // so a just-added item shows up immediately (not only after a tab switch).
+    loadWardrobe().then(() => {
+      const n = state.wardrobe.length;
+      const cc = $('#closetCount');
+      if (cc) cc.textContent = n ? `모아둔 옷 ${n}벌` : '모아둔 옷들을 한눈에 살펴보세요.';
+      if (state.tab === 'closet') renderCloset();
+    }).catch(() => {});
   } catch (err) {
     it.status = 'idle'; renderDetected();
     toast(err.message || '담기에 실패했어요', 'err');
   }
+}
+
+/* FIX 9a — collapse stacked toasts on multi-add. Instead of one toast per item,
+   batch them into a single "N벌 담았어요" (+ a merged warning line if any). */
+const _addQueue = { ok: 0, warn: 0, warnMsg: null, timer: null };
+function addQueued(kind, payload) {
+  if (kind === 'ok') _addQueue.ok += 1;
+  else if (kind === 'warn') { _addQueue.warn += 1; _addQueue.warnMsg = payload; }
+  clearTimeout(_addQueue.timer);
+  _addQueue.timer = setTimeout(flushAddQueue, 650);
+}
+function flushAddQueue() {
+  if (_addQueue.ok > 0) {
+    toast(_addQueue.ok === 1 ? '옷장에 담았어요' : `${_addQueue.ok}벌 담았어요`, 'ok');
+  }
+  if (_addQueue.warn > 0) {
+    const m = _addQueue.warn === 1 && _addQueue.warnMsg
+      ? _addQueue.warnMsg : `일부 항목은 자동 처리에 제한이 있었어요 (${_addQueue.warn}건)`;
+    toast(m, 'warn');
+  }
+  _addQueue.ok = 0; _addQueue.warn = 0; _addQueue.warnMsg = null; _addQueue.timer = null;
 }
 
 /* ============================================================

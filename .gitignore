@@ -1,9 +1,15 @@
+# secrets
 .env
+.env.local
+
+# python
 __pycache__/
 *.pyc
+
+# local dev artifacts (ephemeral in prod; R2/Postgres are the real stores)
 output/
 wardrobe/
-*.log
-*_backup.py
 graph*.json
-.DS_Store
+*.log
+nodeapp_original_backup.py
+pikl_demo/

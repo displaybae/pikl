@@ -23,8 +23,9 @@ Phase-1 migration that was reverted).
 
 ## Auth / token flow
 1. `POST /api/login {nickname}` → `{token, nickname, is_admin}`.
-   - New nickname → row inserted into `imagegen_users`, `signup` event logged.
-   - Existing → `last_seen_at` touched, `login` event logged.
+   - New nickname → row inserted into `imagegen_users`, `signup` event logged, and the
+     owner's **default wardrobe is seeded** into the new user's closet (see *Default
+     wardrobe seeding* below). Existing → `last_seen_at` touched, `login` event logged.
    - If `nickname == $ADMIN_NICKNAME` → `is_admin=true` set on the row.
 2. `token` is a stateless HMAC: `base64url(payload).base64url(hmac_sha256(payload))`,
    signed with `$SESSION_SECRET`. Payload: `{user_id, nickname, is_admin, iat, exp}`
@@ -36,8 +37,13 @@ Phase-1 migration that was reverted).
 Endpoints deal in two related image values, never inline base64 on the wire (keeps
 graphs small):
 - **`ref`** — the stable storage reference used as an *input* (`image`/`images[]`)
-  and for save/delete. R2 mode: `"r2://imagegen/<nickname>/output/<ts>.jpg"` (or
+  and for save/delete. R2 mode: `"r2://imagegen/<user_id>/output/<ts>.jpg"` (or
   `/wardrobe/<file>`). Local mode: `"/output/<ts>.jpg"` or `"/wardrobe/<file>"`.
+  **Keyspace is the user's immutable UUID** (`imagegen/<user_id>/…`) in prod so that
+  distinct-but-similar nicknames (emoji/space/symbol variants) never collide or leak
+  into each other's closet. In local single-user mode (no DB, `user_id=None`) it falls
+  back to the sanitized nickname. Wardrobe filenames carry a `<ts>_<uuid6>_` prefix so
+  rapid saves with the same display name never overwrite one another.
 - **`url`** — a **directly loadable** URL for `<img src>` (the frontend never has to
   transform a ref itself). The backend derives it: `r2://<key>` → `/img/<url-encoded key>`
   (the `/img/` passthrough serves the bytes); local refs (`/output/..`, `/wardrobe/..`)
@@ -116,20 +122,45 @@ Req: `{"image": "<ref or dataURL>"}`
   frontend shows a friendly "지금은 자동 분해를 쓸 수 없어요" notice, not a dev error.
 
 ### `POST /api/ingest`  (auth)  — add to wardrobe (auto-extract if worn)
-Req: `{"image": "<ref or dataURL>", "name": "<str>"}`
+Req: `{"image": "<ref or dataURL>", "name": "<str>",
+       "garment"?: "<Korean category>", "description"?: "<English item description>"}`
+  - `garment` (optional) — one of the `/api/scan` categories
+    (`상의|아우터|하의|원피스|신발|모자|가방|액세서리`). When the source image shows a full
+    worn outfit and the user "담기"-s a specific detected item, pass its `category` here so
+    the backend extracts **THAT** garment (via the internal `GARMENTS` map) rather than the
+    most-prominent one — so scanning one outfit and adding each item stores distinct pieces.
+  - `description` (optional) — the per-item English description from that scan item; used as
+    the exact-item hint for the extraction (avoids a redundant VLM describe call).
+  - Neither provided → falls back to extracting the "most prominent clothing item" (legacy).
 → `200 {"file": "<display name>", "ref": "<ref>", "url": "<loadable url>",
         "extracted": bool, "cost": <usd>, "warning"?: "<str>"}`
-  If the image is a worn shot, it's converted to a product shot via Klein first.
-  If the VLM worn/product classifier is unavailable, it **degrades**: stores the image
-  as-is (`extracted:false`) and returns a `warning` instead of 500. Logs `wardrobe_save`.
+  If the image is a worn shot, it's converted to a product shot via Klein first (the
+  `신발` category also gets an empty-pair form hint). If the VLM worn/product classifier is
+  unavailable, it **degrades**: stores the image as-is (`extracted:false`) and returns a
+  `warning` instead of 500. Logs `wardrobe_save` (meta includes `garment`).
+→ `400 {"error":"이미지가 없음"}` if `image` is missing (was previously a 500).
 
 ### `POST /api/save`  (auth)  — save an image to the wardrobe as-is
 Req: `{"image": "<ref or dataURL>", "name": "<str>"}`
 → `200 {"file": "<display name>", "ref": "<ref>", "url": "<loadable url>"}`. Logs `wardrobe_save`.
+→ `400 {"error":"이미지가 없음"}` if `image` is missing (was previously a 500).
 
 ### `GET /api/wardrobe`  (auth)
 → `200 {"items": [{"file": "<display name>", "ref": "<ref>", "url": "<loadable url>"}, ...]}`
-  (per-nickname). Display each item with `url`; use `ref` for delete / try-on input.
+  (per-user, keyed by `user_id`). **Ordered newest-first** so a just-added item appears at
+  the TOP of the closet. Only image objects (`.png/.jpg/.jpeg/.webp`) are returned (non-image
+  objects are filtered out so they don't render as broken tiles). Display each item with `url`;
+  use `ref` for delete / try-on input.
+
+## Default wardrobe seeding
+On **new-user creation** (`POST /api/login` for a nickname not yet in `imagegen_users`), the
+backend copies every object under the R2 defaults prefix `imagegen/_defaults/wardrobe/` into
+the new user's `imagegen/<user_id>/wardrobe/` keyspace (R2 server-side copy). This gives every
+new user the owner's 19-item starter closet, which they can freely delete. Seeding is
+**best-effort and never blocks or fails login** — a copy error is logged and swallowed.
+`db.upsert_user` returns an `is_new` flag so seeding runs **exactly once per user** (only on
+insert, not on subsequent logins). The `_defaults/` prefix is maintained by the operator
+(populated from the owner's `wardrobe/*.png`). Local (no-R2) mode does not seed.
 
 ### `POST /api/rename`  (auth)  — local mode only
 Req: `{"file": "<current display name>", "name": "<new name>"}`

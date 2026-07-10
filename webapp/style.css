@@ -439,6 +439,10 @@ a { color: inherit; }
   font-size: 11px; letter-spacing: 0;
   color: var(--ink-faint); font-weight: 500;
 }
+.detect-card .dc-cat .dc-src {
+  margin-left: 6px; padding: 1px 7px; border-radius: var(--r-pill);
+  background: var(--surface-2); color: var(--ink-soft); font-size: 10px; font-weight: 500;
+}
 .detect-card .dc-name { font-size: 15px; font-weight: 600; margin: 1px 0; letter-spacing: -.01em; }
 .detect-card .dc-desc {
   font-size: 13px; color: var(--ink-soft);

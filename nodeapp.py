@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from uuid import uuid4
 
 import auth
 import chat
@@ -101,7 +102,24 @@ def call_klein(prompt, images, aspect=None):
 
 
 # ── image references + storage (R2, with local fallback) ─────────────────────
-def _keyspace(nickname):
+# Defaults wardrobe: seeded into every NEW user's closet (owner's starter items).
+DEFAULTS_WARDROBE_PREFIX = storage.KEY_PREFIX + "_defaults/wardrobe/"
+
+
+def _keyspace(user):
+    """R2 prefix for a user's objects. Keyed by the immutable user UUID in prod
+    (so distinct-but-similar nicknames never collide/leak); falls back to a
+    sanitized nickname only in local single-user mode (user_id=None).
+
+    Accepts either a user dict ({user_id, nickname}) or a bare nickname string
+    (legacy/local callers)."""
+    if isinstance(user, dict):
+        uid = user.get("user_id")
+        if uid:
+            return storage.KEY_PREFIX + str(uid)
+        nickname = user.get("nickname")
+    else:
+        nickname = user
     safe = re.sub(r"[^\w가-힣.-]", "_", nickname or "_session")
     return storage.KEY_PREFIX + safe
 
@@ -138,12 +156,12 @@ def resolve_img(s):
     return s
 
 
-def save_output(dataurl, nickname):
+def save_output(dataurl, user):
     """생성본 저장 → 안정적 참조 반환. R2면 'r2://key', 아니면 '/output/name'."""
     fname = f"{time.time_ns()}.jpg"
     raw = base64.b64decode(dataurl.split(",", 1)[1] if dataurl.startswith("data:") else dataurl)
     if storage.enabled:
-        key = f"{_keyspace(nickname)}/output/{fname}"
+        key = f"{_keyspace(user)}/output/{fname}"
         storage.put_bytes(key, raw, "image/jpeg")
         return "r2://" + key
     with open(os.path.join(OUTDIR, fname), "wb") as f:
@@ -151,15 +169,18 @@ def save_output(dataurl, nickname):
     return "/output/" + fname
 
 
-def save_wardrobe(dataurl, name, nickname):
-    """옷장 아이템 저장. 반환: (참조, 표시용 파일명)."""
+def save_wardrobe(dataurl, name, user):
+    """옷장 아이템 저장. 반환: (참조, 표시용 파일명).
+
+    파일명에 time_ns + 짧은 uuid를 넣어 같은 초에 같은 이름으로 여러 번 저장해도
+    키가 충돌하지 않게 한다(FIX 2: 데이터 유실 방지)."""
     name = re.sub(r"[^\w가-힣.-]", "_", name or "item")
     if not name.lower().endswith((".png", ".jpg", ".jpeg")):
         name += ".png"
-    fname = f"{time.strftime('%Y%m%d_%H%M%S')}_{name}"
+    fname = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}_{name}"
     raw = base64.b64decode(dataurl.split(",", 1)[1] if dataurl.startswith("data:") else dataurl)
     if storage.enabled:
-        key = f"{_keyspace(nickname)}/wardrobe/{fname}"
+        key = f"{_keyspace(user)}/wardrobe/{fname}"
         ct = "image/jpeg" if fname.lower().endswith((".jpg", ".jpeg")) else "image/png"
         storage.put_bytes(key, raw, ct)
         return "r2://" + key, fname
@@ -168,23 +189,54 @@ def save_wardrobe(dataurl, name, nickname):
     return "/wardrobe/" + urllib.parse.quote(fname), fname
 
 
-def list_wardrobe(nickname):
-    """옷장 목록: [{file (표시명), ref (참조), url (바로 로드 가능한 이미지 URL)}]."""
+_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def list_wardrobe(user):
+    """옷장 목록: [{file (표시명), ref (참조), url (바로 로드 가능한 이미지 URL)}].
+
+    FIX 3: 이미지 확장자만 포함(깨진 타일 방지) + 최신순(reverse) 정렬 —
+    방금 담은 아이템이 옷장 맨 위에 뜨도록."""
     if storage.enabled:
-        prefix = f"{_keyspace(nickname)}/wardrobe/"
+        prefix = f"{_keyspace(user)}/wardrobe/"
         out = []
         for key in storage.list_prefix(prefix):
+            if not key.lower().endswith(_IMG_EXTS):
+                continue
             ref = "r2://" + key
             out.append({"file": key[len(prefix):], "ref": ref, "url": display_url(ref)})
-        out.sort(key=lambda x: x["file"])
+        # keys are prefixed with a sortable timestamp → newest first.
+        out.sort(key=lambda x: x["file"], reverse=True)
         return out
-    files = sorted(f for f in os.listdir(WARDROBE)
-                   if f.lower().endswith((".png", ".jpg", ".jpeg")))
+    files = sorted((f for f in os.listdir(WARDROBE)
+                    if f.lower().endswith(_IMG_EXTS)), reverse=True)
     out = []
     for f in files:
         ref = "/wardrobe/" + urllib.parse.quote(f)
         out.append({"file": f, "ref": ref, "url": ref})
     return out
+
+
+def seed_default_wardrobe(user):
+    """NEW user에게 owner의 기본 옷장 19벌을 복사(best-effort, 로그인 절대 안 막음).
+    R2 server-side copy로 `_defaults/wardrobe/*` → `<user_id>/wardrobe/*`."""
+    if not storage.enabled:
+        return
+    try:
+        dst_prefix = f"{_keyspace(user)}/wardrobe/"
+        n = 0
+        for src in storage.list_prefix(DEFAULTS_WARDROBE_PREFIX):
+            if not src.lower().endswith(_IMG_EXTS):
+                continue
+            name = src[len(DEFAULTS_WARDROBE_PREFIX):]
+            try:
+                storage.copy(src, dst_prefix + name)
+                n += 1
+            except Exception as e:
+                print("[seed] copy failed:", name, str(e)[:120])
+        print(f"[seed] seeded {n} default items → {dst_prefix}")
+    except Exception as e:  # never block login
+        print("[seed] seeding failed (non-fatal):", str(e)[:200])
 
 
 # ── VLM helpers (unchanged behavior; OpenRouter Gemini) ──────────────────────
@@ -306,14 +358,43 @@ EXTRACT_TMPL = ("Extract only the {g} worn by the person in the image and render
     "else: no other clothing, no bags, no shoes, no accessories, no person, no body parts. "
     "Reproduce the exact color, fabric, cut and details of the original.")
 
+# Korean scan categories → English extract target (mirrors the legacy node editor's
+# GARMENTS map). /api/scan returns these Korean categories in each item's `category`.
+GARMENTS = {
+    "상의": "top / shirt",
+    "아우터": "outer layer (jacket, coat, cardigan)",
+    "하의": "bottoms (pants, skirt)",
+    "원피스": "dress",
+    "신발": "shoes",
+    "모자": "hat / cap",
+    "가방": "bag",
+    "액세서리": "accessories (jewelry, watch, glasses)",
+}
+# Positive form hints so the re-draw doesn't inherit the "worn" shape (verified live).
+FORM_HINTS = {
+    "신발": (" Present the shoes as a brand-new, completely empty pair straight out of the box: "
+             "the shoe openings are hollow and open, with nothing inside them, standing side by "
+             "side on the white surface."),
+}
+DEFAULT_GARMENT = "most prominent clothing item"
 
-def ingest_item(img):
+
+def ingest_item(img, garment=None, description=None):
     """옷장 입구 검문: 착샷이면 제품샷으로 추출.
     반환: (최종 dataURL, 추출여부, 비용, warning|None).
+
+    `garment` (한국어 카테고리, e.g. "상의"/"하의"/"신발")와 `description`(스캔이 준
+    영어 묘사)이 주어지면 THAT specific 아이템을 추출한다. 없으면 가장 두드러진 옷을
+    추출(레거시 동작)한다.
 
     VLM(착샷 판별/묘사)이 실패(OpenRouter 다운 등)하면 하드페일하지 않고 이미지를
     있는 그대로 저장한다 — 사전 분류 없이 graceful degrade."""
     cost = 0
+    # Resolve the extract target from the picked category (fallback: most prominent).
+    g = GARMENTS.get(garment) if garment else None
+    picked = bool(g)
+    if not g:
+        g = DEFAULT_GARMENT
     try:
         d0 = openrouter({"model": VLM, "max_tokens": 10, "messages": [{"role": "user", "content": [
             {"type": "text", "text": (
@@ -329,16 +410,20 @@ def ingest_item(img):
         return img, False, cost, "자동 착샷 판별을 지금은 쓸 수 없어 사진을 그대로 담았어요."
     if not kind.startswith("WORN"):
         return img, False, cost, None
-    g = "most prominent clothing item"
-    try:
-        desc, c2 = describe_item(img, g)
-        cost += c2
-    except Exception as e:
-        print("[ingest] VLM describe failed, extracting without hint:", str(e)[:160])
-        desc = None
+    # Description: prefer the per-item one from /api/scan; else ask the VLM for THIS garment.
+    desc = (description or "").strip() or None
+    if not desc:
+        try:
+            desc, c2 = describe_item(img, g)
+            cost += c2
+        except Exception as e:
+            print("[ingest] VLM describe failed, extracting without hint:", str(e)[:160])
+            desc = None
     p = EXTRACT_TMPL.format(g=g)
     if desc and desc.upper() != "NONE":
         p += f" The exact item to extract: {desc}"
+    if picked and garment in FORM_HINTS:
+        p += FORM_HINTS[garment]
     res = call_klein(p, [img], "1:1")
     cost += res["cost"]
     try:
@@ -500,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {})
 
         if path == "/api/wardrobe":
-            return self._json(200, {"items": list_wardrobe(user["nickname"])})
+            return self._json(200, {"items": list_wardrobe(user)})
 
         # admin
         if path == "/api/admin/overview":
@@ -558,11 +643,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"items": items, "cost": cost})
 
             if path == "/api/ingest":
-                img, extracted, cost, warning = ingest_item(resolve_img(req["image"]))
-                ref, fname = save_wardrobe(img, req.get("name") or "item", user["nickname"])
+                if not req.get("image"):
+                    return self._json(400, {"error": "이미지가 없음"})
+                img, extracted, cost, warning = ingest_item(
+                    resolve_img(req["image"]),
+                    garment=req.get("garment"),
+                    description=req.get("description"))
+                ref, fname = save_wardrobe(img, req.get("name") or "item", user)
                 db.add_usage(uid, "ingest", cost)
                 db.log_event(uid, "wardrobe_save",
-                             {"file": fname, "extracted": extracted, "via": "ingest"})
+                             {"file": fname, "extracted": extracted, "via": "ingest",
+                              "garment": req.get("garment")})
                 resp = {"file": fname, "ref": ref, "url": display_url(ref),
                         "extracted": extracted, "cost": cost}
                 if warning:
@@ -570,8 +661,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, resp)
 
             if path == "/api/save":
+                if not req.get("image"):
+                    return self._json(400, {"error": "이미지가 없음"})
                 ref, fname = save_wardrobe(resolve_img(req["image"]),
-                                           req.get("name") or "item", user["nickname"])
+                                           req.get("name") or "item", user)
                 db.log_event(uid, "wardrobe_save", {"file": fname, "via": "save"})
                 return self._json(200, {"file": fname, "ref": ref, "url": display_url(ref)})
 
@@ -663,6 +756,9 @@ class Handler(BaseHTTPRequestHandler):
             uid = str(row["id"])
             is_admin = bool(row["is_admin"])
             db.log_event(uid, "signup" if is_new else "login", {"nickname": nickname})
+            # NEW user → seed the owner's default wardrobe once (best-effort, non-blocking).
+            if is_new:
+                seed_default_wardrobe({"user_id": uid, "nickname": nickname})
             token = auth.make_token(uid, nickname, is_admin)
             return self._json(200, {"token": token, "nickname": nickname, "is_admin": is_admin})
         # local anonymous mode: still issue a token so the UI flow works
@@ -739,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
             if gen_warning and not res.get("warning"):
                 res["warning"] = gen_warning
 
-            ref = save_output(res["image"], user["nickname"])
+            ref = save_output(res["image"], user)
             res["image"] = ref                 # storage ref (r2://.. / /output/..)
             res["ref"] = ref                   # explicit: pass back to /api/save to chain
             res["url"] = display_url(ref)       # directly loadable in <img src>
@@ -775,7 +871,7 @@ class Handler(BaseHTTPRequestHandler):
             gen_cost = res2["cost"]
             res2["cost"] += vcost
             res2["retry"] = fix
-            ref = save_output(res2["image"], user["nickname"])
+            ref = save_output(res2["image"], user)
             res2["image"] = ref
             res2["ref"] = ref
             res2["url"] = display_url(ref)
