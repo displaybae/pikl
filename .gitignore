@@ -10,5 +10,6 @@ __pycache__/
 output/
 wardrobe/
 graph*.json
+_relay.txt
 *.log
 nodeapp_original_backup.py

@@ -45,6 +45,96 @@ os.makedirs(MODELS, exist_ok=True)
 # Anonymous fallback identity when DB is off (single-user local dev).
 ANON = {"user_id": None, "nickname": "_local", "is_admin": True}
 
+# ── /relay : cross-device clipboard (unauthenticated, ephemeral) ─────────────
+# Temporary text relay so a machine that can't copy-paste with another (e.g. an
+# internal-network laptop) can pull commands by opening a URL and copying there.
+RELAY_FILE = os.path.join(BASE, "_relay.txt")
+RELAY_SEED = """# PIKL 복붙 중계기 ✅ 연결됨
+# ── 윈도우 노트북에서 할 것 ──
+
+# 1) PowerShell 새 창을 열고 확인:
+claude --version
+
+# 2) "찾을 수 없음" 뜨면 → PATH 등록 (아래 한 줄 그대로 복사):
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\\.local\\bin", "User")
+
+# 3) PowerShell 껐다 다시 켜고:
+claude --version
+"""
+
+def _relay_get():
+    try:
+        with open(RELAY_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return RELAY_SEED
+
+def _relay_set(text):
+    try:
+        with open(RELAY_FILE, "w", encoding="utf-8") as f:
+            f.write(text)
+        return True
+    except Exception:
+        return False
+
+RELAY_HTML = """<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>복붙 중계기</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f1115;color:#e6e6e6;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:14px}
+  h1{font-size:16px;margin:6px 0 10px;color:#9ecbff}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  button{flex:1;min-width:120px;padding:12px;border:0;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer}
+  .copy{background:#2ea043;color:#fff}
+  .save{background:#1f6feb;color:#fff}
+  .refresh{background:#30363d;color:#e6e6e6}
+  textarea{width:100%;height:60vh;background:#0b0d12;color:#e6e6e6;border:1px solid #30363d;
+    border-radius:10px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:14px;line-height:1.5;white-space:pre;overflow:auto}
+  .hint{color:#8b949e;font-size:12px;margin-top:8px}
+  .flash{color:#2ea043;font-size:12px;margin-left:6px}
+</style></head><body><div class="wrap">
+<h1>📋 복붙 중계기 <span id="flash" class="flash"></span></h1>
+<div class="bar">
+  <button class="copy" onclick="copyAll()">전체 복사</button>
+  <button class="save" onclick="save()">저장(이 화면 → 서버)</button>
+  <button class="refresh" onclick="pull(true)">새로고침</button>
+</div>
+<textarea id="t" spellcheck="false"></textarea>
+<div class="hint">이 페이지를 양쪽 기기에서 열면 텍스트를 공유해요. 한쪽에서 <b>저장</b> → 다른 쪽에서 <b>새로고침</b>. 편집 중이 아니면 3초마다 자동으로 최신 내용을 불러와요.</div>
+<script>
+const t=document.getElementById('t'), flash=document.getElementById('flash');
+let editing=false, lastServer="";
+t.addEventListener('focus',()=>editing=true);
+t.addEventListener('blur',()=>editing=false);
+function say(m){flash.textContent=m;setTimeout(()=>flash.textContent="",1500)}
+async function pull(force){
+  try{
+    const r=await fetch('/relay/data',{cache:'no-store'});
+    const j=await r.json();
+    if(force || (!editing && j.text!==lastServer)){ t.value=j.text; if(force) say('불러옴'); }
+    lastServer=j.text;
+  }catch(e){}
+}
+async function save(){
+  try{
+    await fetch('/relay/data',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text:t.value})});
+    lastServer=t.value; say('저장됨 ✓');
+  }catch(e){ say('저장 실패'); }
+}
+function copyAll(){
+  t.select();
+  navigator.clipboard.writeText(t.value).then(()=>say('복사됨 ✓')).catch(()=>{
+    document.execCommand('copy'); say('복사됨 ✓');
+  });
+}
+pull(true); setInterval(pull, 3000);
+</script></div></body></html>"""
+
 
 # ── OpenRouter (Gemini VLM) ───────────────────────────────────────────────────
 def openrouter(body, timeout=60, tries=3):
@@ -572,6 +662,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self._json(200, {"ok": True})
 
+        # ── /relay : cross-device clipboard (no auth) ──────────────────────────
+        if path == "/relay":
+            return self._bytes(RELAY_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/relay/data":
+            return self._json(200, {"text": _relay_get()})
+
         # ── consumer frontend (webapp/) served at "/" ──────────────────────────
         if path in ("/", "/index.html"):
             return self._serve_file(WEBAPP, "index.html")
@@ -678,6 +774,14 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(length)) if length else {}
         except Exception as e:
             return self._json(400, {"error": f"bad request: {e}"})
+
+        # ── /relay : cross-device clipboard save (no auth) ─────────────────────
+        if path == "/relay/data":
+            txt = req.get("text", "")
+            if not isinstance(txt, str):
+                txt = str(txt)
+            _relay_set(txt[:100000])
+            return self._json(200, {"ok": True})
 
         # login is the only unauthenticated data route
         if path == "/api/login":
