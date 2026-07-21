@@ -104,7 +104,7 @@ RELAY_HTML = """<!doctype html><html lang="ko"><head>
   <button class="refresh" onclick="pull(true)">새로고침</button>
 </div>
 <textarea id="t" spellcheck="false"></textarea>
-<div class="hint">이 페이지를 양쪽 기기에서 열면 텍스트를 공유해요. 한쪽에서 <b>저장</b> → 다른 쪽에서 <b>새로고침</b>. 편집 중이 아니면 3초마다 자동으로 최신 내용을 불러와요.</div>
+<div class="hint">이 페이지를 양쪽 기기에서 열면 텍스트를 공유해요. 한쪽에서 <b>저장</b> → 다른 쪽에서 <b>새로고침</b>. 편집 중이 아니면 3초마다 자동으로 최신 내용을 불러와요. · 📁 파일은 <a href="/drop" style="color:#9ecbff">파일 드롭</a></div>
 <script>
 const t=document.getElementById('t'), flash=document.getElementById('flash');
 let editing=false, lastServer="";
@@ -133,6 +133,154 @@ function copyAll(){
   });
 }
 pull(true); setInterval(pull, 3000);
+</script></div></body></html>"""
+
+
+# ── /drop : cross-device file drop (unauthenticated, ephemeral) ──────────────
+# Companion to /relay but for files: upload on one device, download on another.
+# Files live on local FS (ephemeral — fine for immediate phone↔PC transfer). Meta
+# is a sidecar .meta JSON. Newest DROP_KEEP files are retained, older ones pruned.
+DROP_DIR = os.path.join(BASE, "_drop")
+os.makedirs(DROP_DIR, exist_ok=True)
+DROP_MAX = 100 * 1024 * 1024   # 100 MB per-file cap
+DROP_KEEP = 50                 # keep newest N files, prune the rest
+_FID_RE = re.compile(r"[0-9a-f]{12}\Z")
+
+def _drop_meta(fid):
+    if not _FID_RE.match(fid or ""):
+        return None
+    try:
+        with open(os.path.join(DROP_DIR, fid + ".meta"), "r", encoding="utf-8") as m:
+            return json.load(m)
+    except Exception:
+        return None
+
+def _drop_list():
+    """Newest-first list of {id, name, size, ts}."""
+    items = []
+    for f in os.listdir(DROP_DIR):
+        if f.endswith(".meta"):
+            meta = _drop_meta(f[:-5])
+            if meta:
+                items.append(meta)
+    items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return items
+
+def _drop_stream_save(filename, rfile, length):
+    """Stream the raw request body to disk in chunks (no full-file buffering)."""
+    fid = uuid4().hex[:12]
+    remaining = length
+    with open(os.path.join(DROP_DIR, fid + ".bin"), "wb") as out:
+        while remaining > 0:
+            chunk = rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            out.write(chunk)
+            remaining -= len(chunk)
+    meta = {"id": fid, "name": (filename or "file")[:255],
+            "size": length - remaining, "ts": int(time.time())}
+    with open(os.path.join(DROP_DIR, fid + ".meta"), "w", encoding="utf-8") as m:
+        json.dump(meta, m)
+    _drop_prune()
+    return meta
+
+def _drop_delete(fid):
+    if not _FID_RE.match(fid or ""):
+        return
+    for suf in (".bin", ".meta"):
+        try:
+            os.remove(os.path.join(DROP_DIR, fid + suf))
+        except Exception:
+            pass
+
+def _drop_prune():
+    for old in _drop_list()[DROP_KEEP:]:
+        _drop_delete(old["id"])
+
+DROP_HTML = """<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>파일 드롭</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f1115;color:#e6e6e6;font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:14px}
+  h1{font-size:16px;margin:6px 0 10px;color:#9ecbff}
+  .drop{display:block;border:2px dashed #30363d;border-radius:14px;padding:26px 16px;
+    text-align:center;background:#0b0d12;cursor:pointer;transition:.15s}
+  .drop.hot{border-color:#1f6feb;background:#0d1830}
+  .drop b{color:#9ecbff}
+  .drop small{display:block;color:#8b949e;margin-top:6px}
+  input[type=file]{display:none}
+  .prog{height:4px;background:#1f6feb;width:0;border-radius:2px;transition:width .12s;margin-top:10px}
+  .bar{display:flex;gap:8px;align-items:center;margin:12px 0 6px}
+  .refresh{padding:9px 14px;border:0;border-radius:9px;background:#30363d;color:#e6e6e6;font-size:14px;cursor:pointer}
+  .flash{color:#2ea043;font-size:12px}
+  ul{list-style:none;padding:0;margin:8px 0}
+  li{display:flex;align-items:center;gap:10px;padding:11px 12px;background:#0b0d12;
+    border:1px solid #30363d;border-radius:10px;margin-bottom:8px}
+  li .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  li .sz{color:#8b949e;font-size:12px;flex-shrink:0}
+  a.dl{background:#2ea043;color:#fff;text-decoration:none;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:600}
+  button.del{background:transparent;border:0;color:#8b949e;font-size:18px;cursor:pointer;padding:2px 4px}
+  .empty{color:#8b949e;font-size:13px;text-align:center;padding:18px}
+  .foot{color:#8b949e;font-size:12px;margin-top:14px;text-align:center}
+  .foot a{color:#9ecbff}
+</style></head><body><div class="wrap">
+<h1>📁 파일 드롭 <span id="flash" class="flash"></span></h1>
+<label class="drop" id="zone">
+  <b>탭해서 파일 선택</b> 또는 여기로 끌어다 놓기
+  <small>한쪽에서 올리면 다른 기기에서 받아요 · 최대 100MB</small>
+  <input type="file" id="f" multiple>
+</label>
+<div class="prog" id="prog"></div>
+<div class="bar"><button class="refresh" onclick="load(true)">새로고침</button></div>
+<ul id="list"></ul>
+<div class="foot">📋 텍스트 공유는 <a href="/relay">복붙 중계기</a></div>
+<script>
+const zone=document.getElementById('zone'), f=document.getElementById('f'),
+      list=document.getElementById('list'), flash=document.getElementById('flash'),
+      prog=document.getElementById('prog');
+function say(m){flash.textContent=m;setTimeout(()=>flash.textContent="",1800)}
+function fmt(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(0)+' KB';return (n/1048576).toFixed(1)+' MB'}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+['dragenter','dragover'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.add('hot')}));
+['dragleave','drop'].forEach(e=>zone.addEventListener(e,ev=>{ev.preventDefault();zone.classList.remove('hot')}));
+zone.addEventListener('drop',ev=>upload([...ev.dataTransfer.files]));
+f.addEventListener('change',()=>{upload([...f.files]);f.value='';});
+function upload(files){
+  if(!files.length)return;
+  let i=0;
+  const next=()=>{
+    if(i>=files.length){prog.style.width='0';load(true);say('올림 ✓');return}
+    const file=files[i++];
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/drop/upload');
+    xhr.setRequestHeader('X-Filename',encodeURIComponent(file.name));
+    xhr.upload.onprogress=e=>{if(e.lengthComputable)prog.style.width=(e.loaded/e.total*100)+'%'};
+    xhr.onload=()=>{prog.style.width='100%';setTimeout(next,120)};
+    xhr.onerror=()=>{say('실패');next()};
+    xhr.send(file);
+  };
+  next();
+}
+async function del(id){
+  await fetch('/drop/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  load(true);
+}
+async function load(force){
+  try{
+    const r=await fetch('/drop/list',{cache:'no-store'});
+    const j=await r.json();
+    if(!j.files.length){list.innerHTML='<div class="empty">아직 올린 파일이 없어요</div>';return}
+    list.innerHTML=j.files.map(x=>
+      '<li><span class="nm">'+esc(x.name)+'</span><span class="sz">'+fmt(x.size)+'</span>'+
+      '<a class="dl" href="/drop/file/'+x.id+'">받기</a>'+
+      '<button class="del" title="삭제" onclick="del(\\''+x.id+'\\')">✕</button></li>').join('');
+    if(force)say('불러옴');
+  }catch(e){}
+}
+load(true); setInterval(load, 3000);
 </script></div></body></html>"""
 
 
@@ -668,6 +816,31 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/relay/data":
             return self._json(200, {"text": _relay_get()})
 
+        # ── /drop : cross-device file drop (no auth) ───────────────────────────
+        if path == "/drop":
+            return self._bytes(DROP_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/drop/list":
+            return self._json(200, {"files": _drop_list()})
+        if path.startswith("/drop/file/"):
+            fid = path[len("/drop/file/"):]
+            meta = _drop_meta(fid)
+            binp = os.path.join(DROP_DIR, fid + ".bin")
+            if not meta or not os.path.isfile(binp):
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition",
+                             "attachment; filename*=UTF-8''" + urllib.parse.quote(meta["name"]))
+            self.send_header("Content-Length", str(os.path.getsize(binp)))
+            self.end_headers()
+            with open(binp, "rb") as fsrc:
+                while True:
+                    chunk = fsrc.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            return
+
         # ── consumer frontend (webapp/) served at "/" ──────────────────────────
         if path in ("/", "/index.html"):
             return self._serve_file(WEBAPP, "index.html")
@@ -769,11 +942,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+
+        # ── /drop : file upload (raw binary body, no auth) — before JSON parse ──
+        if path == "/drop/upload":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length <= 0 or length > DROP_MAX:
+                    return self._json(413, {"error": "파일이 비었거나 너무 큽니다(최대 100MB)"})
+                name = urllib.parse.unquote(self.headers.get("X-Filename", "file"))
+                meta = _drop_stream_save(name, self.rfile, length)
+                return self._json(200, {"ok": True, "file": meta})
+            except Exception as e:
+                return self._json(400, {"error": f"upload failed: {e}"})
+
         try:
             length = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(length)) if length else {}
         except Exception as e:
             return self._json(400, {"error": f"bad request: {e}"})
+
+        # ── /drop : delete a dropped file (no auth) ────────────────────────────
+        if path == "/drop/delete":
+            _drop_delete(str(req.get("id", "")))
+            return self._json(200, {"ok": True})
 
         # ── /relay : cross-device clipboard save (no auth) ─────────────────────
         if path == "/relay/data":
