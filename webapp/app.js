@@ -49,6 +49,7 @@ const LS = {
   nick:  'pikl_nick',
   admin: 'pikl_admin',
   onbDone: n => `pikl_onb_done_${n}`,
+  tourDone: n => `pikl_tour_done_${n}`,
 };
 
 /* ============================================================
@@ -272,6 +273,7 @@ function enterApp(fresh) {
   } else {
     const h = (location.hash || '').replace('#', '');
     switchTab(['closet', 'add', 'tryon'].includes(h) ? h : 'closet');
+    setTimeout(() => startTour(), 500);
   }
 }
 
@@ -328,6 +330,7 @@ $('#onbSkip').addEventListener('click', finishOnboarding);
 function finishOnboarding() {
   localStorage.setItem(LS.onbDone(state.nickname), '1');
   switchTab('closet');
+  setTimeout(() => startTour(), 350);
 }
 
 /* ============================================================
@@ -1098,6 +1101,12 @@ function renderChatThread() {
   thread.innerHTML = '';
   appendChatBubble('assistant', CHAT_GREETING);
   const chips = el('div', 'chat-chips');
+  // local action — replays the coach-mark tour, no API call
+  const replay = el('button', 'chat-chip');
+  replay.type = 'button';
+  replay.textContent = '📖 사용법 다시 보기';
+  replay.addEventListener('click', () => { closeChat(); setTimeout(() => startTour(true), 300); });
+  chips.appendChild(replay);
   CHAT_SUGGESTIONS.forEach(q => {
     const chip = el('button', 'chat-chip');
     chip.type = 'button';
@@ -1194,6 +1203,144 @@ $('#chatSend').addEventListener('click', () => sendChat());
     }
   });
 })();
+
+/* ============================================================
+   8) FEATURE TOUR — one-time coach-mark walkthrough.
+   Pure client-side (no API/LLM calls). Shown once per nickname
+   (localStorage), replayable from the help sheet.
+   ============================================================ */
+const TOUR_STEPS = [
+  { tab: 'closet', target: '#tabbar', place: 'above',
+    title: '세 탭이 전부예요',
+    body: '옷장 · 추가 · 입혀보기. 30초면 다 둘러볼 수 있어요.' },
+  { tab: 'closet', target: '#closetSeg',
+    title: '옷장',
+    body: '모은 옷은 "옷"에, 입혀보기에 쓸 사람 사진은 "내 사진"에 모여요. 카드를 누르면 크게 보거나 지울 수 있어요.' },
+  { tab: 'add', target: '#addZone',
+    title: '사진 한 장으로 옷 담기',
+    body: '사진을 올리면 입고 있는 옷을 자동으로 찾아줘요. 찾은 옷 옆 "담기"를 누르면 옷장에 저장돼요.' },
+  { tab: 'tryon', target: ['#personZone', '#personSrc'],
+    title: '입혀보기 ① 사람 사진',
+    body: '새 사진을 올리거나, 저장해둔 "내 사진"에서 골라요.' },
+  { tab: 'tryon', target: '#pickBody',
+    title: '입혀보기 ② 옷 고르기',
+    body: '옷장에 담아둔 옷이 여기 보여요. 최대 4벌까지 골라 한 번에 입혀볼 수 있어요.' },
+  { target: '#helpBtn',
+    title: '막히면 언제든',
+    body: '궁금한 게 생기면 도우미에게 물어보세요. 이 사용법도 여기서 다시 볼 수 있어요.' },
+  { title: '준비 끝!',
+    body: '사진 한 장이면 바로 시작할 수 있어요. 지금 첫 옷을 담아볼까요?',
+    cta: '사진 올려 옷 담기', ctaTab: 'add' },
+];
+
+const tour = { on: false, i: 0, placed: false };
+
+function startTour(force) {
+  if (tour.on) return;
+  if (!force && localStorage.getItem(LS.tourDone(state.nickname))) return;
+  tour.on = true; tour.placed = false;
+  document.body.classList.add('tour-lock');
+  $('#tour').classList.add('on');
+  showTourStep(0);
+}
+function endTour() {
+  tour.on = false;
+  document.body.classList.remove('tour-lock');
+  $('#tour').classList.remove('on');
+  if (state.nickname) localStorage.setItem(LS.tourDone(state.nickname), '1');
+}
+
+function showTourStep(i) {
+  const s = TOUR_STEPS[i];
+  tour.i = i;
+  if (s.tab && state.tab !== s.tab) switchTab(s.tab);
+  $('#tourNum').textContent = `${i + 1} / ${TOUR_STEPS.length}`;
+  $('#tourTitle').textContent = s.title;
+  $('#tourBody').textContent = s.body;
+  $('#tourPrev').style.visibility = i === 0 ? 'hidden' : 'visible';
+  $('#tourNext').textContent = s.cta || (i === TOUR_STEPS.length - 1 ? '시작하기' : '다음');
+  // place after the tab switch paints; re-place once for late async layout
+  requestAnimationFrame(() => requestAnimationFrame(() => placeTour(s)));
+  setTimeout(() => { if (tour.on && tour.i === i) placeTour(s); }, 450);
+}
+
+function placeTour(s) {
+  if (!tour.on) return;
+  const hole = $('#tourHole'), card = $('#tourCard');
+  const appRect = $('#app').getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+
+  const els = (s.target ? [].concat(s.target) : []).map(sel => $(sel)).filter(Boolean);
+  // bring in-flow targets on screen before measuring (fixed ones never move)
+  const first = els[0];
+  if (first && getComputedStyle(first).position !== 'fixed') {
+    const r = first.getBoundingClientRect();
+    if (r.top < 70 || r.bottom > vh - 90) first.scrollIntoView({ block: 'center' });
+  }
+  const rects = els.map(n => n.getBoundingClientRect()).filter(r => r.width > 1 && r.height > 1);
+
+  // card width before reading its height
+  const cw = Math.min(appRect.width - 32, 340);
+  card.style.width = cw + 'px';
+  const ch = card.offsetHeight;
+
+  const firstPlace = !tour.placed;
+  if (firstPlace) { hole.style.transition = 'none'; card.style.transition = 'none'; }
+
+  let holeT, holeL, holeW, holeH;
+  if (!rects.length) {
+    // finale / missing target — hole collapses to a point → full dim
+    holeT = vh / 2; holeL = vw / 2; holeW = 0; holeH = 0;
+    hole.classList.add('none');
+  } else {
+    hole.classList.remove('none');
+    const pad = 8;
+    holeT = Math.min(...rects.map(r => r.top)) - pad;
+    holeL = Math.min(...rects.map(r => r.left)) - pad;
+    holeW = Math.max(...rects.map(r => r.right)) + pad - holeL;
+    holeH = Math.max(...rects.map(r => r.bottom)) + pad - holeT;
+  }
+  hole.style.top = holeT + 'px';
+  hole.style.left = holeL + 'px';
+  hole.style.width = holeW + 'px';
+  hole.style.height = holeH + 'px';
+
+  // card: below the hole when there's room, above when not, centered otherwise
+  const gap = 14;
+  let top;
+  if (!rects.length) top = (vh - ch) / 2;
+  else if (s.place === 'above' || (vh - (holeT + holeH) < ch + gap + 16 && holeT > ch + gap + 16))
+    top = holeT - gap - ch;
+  else top = holeT + holeH + gap;
+  top = Math.max(16, Math.min(top, vh - ch - 16));
+  let left = rects.length ? holeL + holeW / 2 - cw / 2 : appRect.left + (appRect.width - cw) / 2;
+  left = Math.max(appRect.left + 16, Math.min(left, appRect.right - cw - 16));
+  card.style.top = top + 'px';
+  card.style.left = left + 'px';
+
+  if (firstPlace) {
+    tour.placed = true;
+    requestAnimationFrame(() => { hole.style.transition = ''; card.style.transition = ''; });
+  }
+}
+
+$('#tourNext').addEventListener('click', () => {
+  const s = TOUR_STEPS[tour.i];
+  if (tour.i >= TOUR_STEPS.length - 1) {
+    endTour();
+    if (s.ctaTab) switchTab(s.ctaTab);
+    return;
+  }
+  showTourStep(tour.i + 1);
+});
+$('#tourPrev').addEventListener('click', () => { if (tour.i > 0) showTourStep(tour.i - 1); });
+$('#tourSkip').addEventListener('click', endTour);
+// tapping the dim (or the spotlighted area) also advances
+$('#tour').addEventListener('click', e => {
+  if (e.target.id === 'tour' || e.target.id === 'tourHole') $('#tourNext').click();
+});
+window.addEventListener('resize', () => { if (tour.on) placeTour(TOUR_STEPS[tour.i]); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && tour.on) endTour(); });
 
 /* ============================================================
    SHEET / MODAL primitives

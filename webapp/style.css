@@ -933,4 +933,47 @@ a { color: inherit; }
 .chat-send[disabled] { background: var(--surface-2); color: var(--ink-faint); pointer-events: none; }
 .chat-send svg { width: 19px; height: 19px; }
 
+/* ============================================================
+   FEATURE TOUR — one-time coach-marks (pure client-side)
+   ============================================================ */
+body.tour-lock { overflow: hidden; }
+.tour { position: fixed; inset: 0; z-index: 75; display: none; }
+.tour.on { display: block; animation: fade .3s ease; }
+.tour-hole {
+  position: fixed;
+  border-radius: 18px;
+  border: 1.5px solid rgba(255,255,255,.8);
+  box-shadow: 0 0 0 120vmax rgba(17,17,19,.55);
+  transition: top .38s var(--ease), left .38s var(--ease),
+              width .38s var(--ease), height .38s var(--ease);
+}
+.tour-hole.none { border-color: transparent; }
+.tour-card {
+  position: fixed;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 18px 18px 12px;
+  transition: top .38s var(--ease), left .38s var(--ease);
+}
+.tour-num {
+  font-size: 11px; font-weight: 600; color: var(--ink-faint);
+  letter-spacing: .04em; margin-bottom: 7px;
+}
+.tour-card h3 { margin: 0 0 6px; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.tour-card p { margin: 0; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
+.tour-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 14px;
+}
+.tour-skip { font-size: 13px; color: var(--ink-faint); padding: 8px 2px; }
+.tour-btns { display: flex; align-items: center; gap: 4px; }
+.tour-prev { font-size: 14px; color: var(--ink-soft); padding: 9px 12px; border-radius: var(--r-pill); }
+.tour-next {
+  font-size: 14px; font-weight: 600; color: #fff; background: var(--ink);
+  padding: 9px 18px; border-radius: var(--r-pill);
+  transition: transform .15s var(--ease), opacity .2s var(--ease);
+}
+.tour-next:active { transform: scale(.96); opacity: .9; }
+
 .hidden { display: none !important; }
